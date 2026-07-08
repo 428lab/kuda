@@ -6,7 +6,7 @@ cronやsystemd timerで回すか、/status の pool_remaining を見て
 閾値を切ったら補充する運用を想定。
 
 環境変数:
-  PIPE_URL      例: https://rng-pipe.<subdomain>.workers.dev
+  PIPE_URL      例: https://kuda.<subdomain>.workers.dev
   INGEST_TOKEN  wranglerに入れたものと同じ値
   SOURCE        hwrng | serial | urandom  (default: hwrng)
   N_BYTES       1回の補充量 (default: 256)
