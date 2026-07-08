@@ -10,9 +10,16 @@
 //   - 枯渇時は503。疑似乱数へのフォールバックはしない(管が空なら空と言う)
 //   - 全ドロップは drops 表に監査ログとして残る(粒の出自 source も記録)
 
+// デプロイ確認用のバージョン印。/status に出るので、デプロイが反映されたか判定できる。
+const VERSION = "cron-internal-1";
+
 // ANU QRNG エンドポイントの既定値。wrangler.jsonc の vars で上書き可能。
 const DEFAULT_ANU_API_URL = "https://qrng.anu.edu.au/API/jsonI.php";
 const DEFAULT_ANU_REFILL_LENGTH = 1;
+
+// 公開APIのパス。Worker の fetch はこれ以外を DO へ転送しない
+// (cron専用の内部パスを外部から叩かせないため)。
+const PUBLIC_PATHS = new Set(["/drop", "/status", "/refill", "/ingest"]);
 
 export interface Env {
   POOL: DurableObjectNamespace;
@@ -32,19 +39,24 @@ function anuUrl(env: Env): string {
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
+    // 公開パスのみ DO へ転送。未知パス(cron専用の内部パス含む)は 404。
+    const url = new URL(req.url);
+    if (!PUBLIC_PATHS.has(url.pathname)) return json({ error: "not found" }, 404);
     const id = env.POOL.idFromName("main");
     return env.POOL.get(id).fetch(req);
   },
 
-  // cron (wrangler.jsonc の triggers) — ANUから定期的に一滴取ってプールへ
+  // cron (wrangler.jsonc の triggers) — ANUから定期的に一滴取ってプールへ。
+  // 内部からの自己呼び出しなので認証は不要。cron専用パス /__cron_refill を叩く。
+  // このパスは公開 fetch から転送されないため外部からは到達できない。
   async scheduled(_event: ScheduledEvent, env: Env): Promise<void> {
     const id = env.POOL.idFromName("main");
-    await env.POOL.get(id).fetch(
-      new Request("https://internal/refill", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${env.INGEST_TOKEN}` },
-      })
+    const res = await env.POOL.get(id).fetch(
+      new Request("https://internal/__cron_refill", { method: "POST" })
     );
+    if (!res.ok) {
+      console.error(`cron refill failed: ${res.status} ${await res.text()}`);
+    }
   },
 };
 
@@ -105,6 +117,8 @@ export class EntropyPool {
     try {
       if (req.method === "POST" && url.pathname === "/ingest") return await this.ingest(req);
       if (req.method === "POST" && url.pathname === "/refill") return await this.refillFromAnu(req);
+      // cron専用: 内部からのみ到達(Worker fetch が転送しない)。認証不要。
+      if (req.method === "POST" && url.pathname === "/__cron_refill") return await this.refillFromAnu(req, true);
       if (req.method === "GET" && url.pathname === "/drop") return this.drop();
       if (req.method === "GET" && url.pathname === "/status") return this.status();
       return json({ error: "not found" }, 404);
@@ -119,20 +133,23 @@ export class EntropyPool {
     return !!this.env.INGEST_TOKEN && timingSafeEqual(token, this.env.INGEST_TOKEN);
   }
 
-  // POST /refill — ANU QRNGからサーバー側で一滴取得してプールへ(第一段階の補充経路)
-  // cronから自動で叩かれる。手動でも叩ける(要トークン)
-  private async refillFromAnu(req: Request): Promise<Response> {
-    if (!this.authorized(req)) return json({ error: "unauthorized" }, 401);
+  // POST /refill — ANU QRNGからサーバー側で取得してプールへ(第一段階の補充経路)
+  // 外部から叩く場合は要トークン。cron からは internal=true で認証を省く
+  // (自分自身の呼び出しであり、/__cron_refill は外部到達不可のため)。
+  private async refillFromAnu(req: Request, internal = false): Promise<Response> {
+    if (!internal && !this.authorized(req)) return json({ error: "unauthorized" }, 401);
 
     const res = await fetch(anuUrl(this.env), {
       headers: { "Cache-Control": "no-cache" },
       cf: { cacheTtl: 0, cacheEverything: false },
     });
     if (!res.ok) {
+      console.error(`ANU API error: ${res.status}`);
       return json({ error: `ANU API ${res.status}`, pool_remaining: this.poolCount() }, 502);
     }
     const body = (await res.json()) as { success?: boolean; data?: number[] };
     if (!body.success || !body.data?.length) {
+      console.error(`ANU API returned no data: ${JSON.stringify(body)}`);
       return json({ error: "ANU API returned no data", raw: body }, 502);
     }
 
@@ -224,6 +241,7 @@ export class EntropyPool {
       .toArray()[0].t;
 
     return json({
+      version: VERSION,          // デプロイ反映確認用
       pool_remaining: this.poolCount(),
       total_drops: drops.n,
       last_drop_at: drops.last,
