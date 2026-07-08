@@ -1,6 +1,6 @@
 # Cloudflare セットアップ手順
 
-乱数の管 (rng-pipe) を Cloudflare Workers にデプロイする手順。
+乱数の管 (kuda) を Cloudflare Workers にデプロイする手順。
 コードと `wrangler.jsonc` はデプロイ可能な状態になっているので、
 やることは **アカウント準備 → 認証 → secret投入 → deploy → 初回シード** の流れ。
 
@@ -17,7 +17,7 @@
 
 1. https://dash.cloudflare.com でアカウント作成(無料)。
 2. **workers.dev サブドメイン** は初回 `wrangler deploy` 時に自動で登録を求められる。
-   例: `rng-pipe.<あなたのサブドメイン>.workers.dev` が払い出される。
+   例: `kuda.<あなたのサブドメイン>.workers.dev` が払い出される。
 
 ## 2. 認証(ローカルCLI)
 
@@ -67,7 +67,7 @@ npx wrangler deploy
 
 ```sh
 TOKEN=<3で登録したトークン>
-URL=https://rng-pipe.<あなたのサブドメイン>.workers.dev
+URL=https://kuda.<あなたのサブドメイン>.workers.dev
 
 # ANU から補充(通常は cron が1日1回、1024バイトを自動でやる)
 curl -X POST $URL/refill -H "Authorization: Bearer $TOKEN"
