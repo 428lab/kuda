@@ -8,4 +8,4 @@ INGEST_TOKEN="change-me-to-a-long-random-token"
 # vars はデフォルトを wrangler.jsonc に置いてあるので通常は不要。
 # ローカルで上書きしたいときだけ設定する。
 # ANU_API_URL="https://qrng.anu.edu.au/API/jsonI.php"
-# ANU_REFILL_LENGTH="1"
+# ANU_REFILL_LENGTH="1024"

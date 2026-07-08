@@ -59,7 +59,7 @@ npx wrangler deploy
 ```
 
 - Durable Object バインディング (`POOL`) と SQLite マイグレーション (`v1`) が適用される。
-- cron トリガー(`wrangler.jsonc` の `triggers.crons`、既定 30分毎)も自動で有効化される。
+- cron トリガー(`wrangler.jsonc` の `triggers.crons`、既定 1日1回)も自動で有効化される。
 
 ## 5. 初回シード & 動作確認
 
@@ -69,7 +69,7 @@ npx wrangler deploy
 TOKEN=<3で登録したトークン>
 URL=https://rng-pipe.<あなたのサブドメイン>.workers.dev
 
-# ANU から補充(通常は cron が30分毎に自動でやる)
+# ANU から補充(通常は cron が1日1回、1024バイトを自動でやる)
 curl -X POST $URL/refill -H "Authorization: Bearer $TOKEN"
 
 # 残量確認(消費しない)
@@ -88,13 +88,13 @@ curl $URL/drop
 
 | 項目 | 場所 | 既定 | 説明 |
 |------|------|------|------|
-| cron 間隔 | `triggers.crons` | `*/30 * * * *`(30分毎) | ANU自動補充の頻度 |
-| 1回の取得量 | `vars.ANU_REFILL_LENGTH` | `1` | cron一回あたりの取得バイト数 |
+| cron 間隔 | `triggers.crons` | `17 15 * * *`(1日1回, UTC) | ANU自動補充の頻度 |
+| 1回の取得量 | `vars.ANU_REFILL_LENGTH` | `1024` | cron一回あたりの取得バイト数(jsonI.php の上限) |
 | ANUエンドポイント | `vars.ANU_API_URL` | `https://qrng.anu.edu.au/API/jsonI.php` | QRNG API |
 
-> 30分毎 × 1バイトだと 1時間で2バイトしか貯まらない。消費ペースに合わせて
-> `ANU_REFILL_LENGTH` を増やす(例 `10`〜`100`)か、cron間隔を縮めること。
-> ANU のレート制限には注意。
+> レート制限・無料枠は**リクエスト数**で効くので、間隔を縮めるより1回で満タン
+> (`1024`)取る方が効率的。1日1回×1024バイト = 1日1024滴の補充力があり、
+> 消費がそれ未満なら足りる。足りなくなったら cron の回数を増やすこと。
 
 秘密値(`INGEST_TOKEN`)は `vars` ではなく **secret** で管理する(手順3)。
 ローカル開発では `.dev.vars` に置く(`cp .dev.vars.example .dev.vars`、gitignore済み)。
