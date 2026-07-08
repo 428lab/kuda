@@ -88,7 +88,7 @@ curl $URL/drop
 
 | 項目 | 場所 | 既定 | 説明 |
 |------|------|------|------|
-| cron 間隔 | `triggers.crons` | `17 15 * * *`(1日1回, UTC) | ANU自動補充の頻度 |
+| cron 間隔 | `triggers.crons` | `0 3 * * *`(UTC 03:00 = JST 12:00) | ANU自動補充の頻度 |
 | 1回の取得量 | `vars.ANU_REFILL_LENGTH` | `1024` | cron一回あたりの取得バイト数(jsonI.php の上限) |
 | ANUエンドポイント | `vars.ANU_API_URL` | `https://qrng.anu.edu.au/API/jsonI.php` | QRNG API |
 
