@@ -78,6 +78,9 @@ npx wrangler deploy
 - デプロイ後、`POST /refill` を一度手で叩いてANUのレスポンス形式とレート制限の
   挙動を確認すること(レガシーAPIは仕様が変わることがある)。
 
+アカウント準備・認証・secret登録・初回シードまでの詳細な手順は
+[docs/cloudflare-setup.md](docs/cloudflare-setup.md) を参照。
+
 ## ESP32 (第二源泉) のセットアップ
 
 配線は3本。ブレッドボード不要、メス-メスのジャンパで直結できる。
