@@ -1,0 +1,41 @@
+{
+  // 乱数の管 — Cloudflare Worker 設定
+  // デプロイ前に:  npx wrangler secret put INGEST_TOKEN
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rng-pipe",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+
+  // 平文の設定値。秘密ではないので vars でよい(INGEST_TOKEN は secret 側)。
+  "vars": {
+    "ANU_API_URL": "https://qrng.anu.edu.au/API/jsonI.php",
+    "ANU_REFILL_LENGTH": "1"
+  },
+
+  // EntropyPool は SQLite ストレージ (state.storage.sql) を使うので
+  // SQLite-backed Durable Object として登録する。
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "POOL",
+        "class_name": "EntropyPool"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["EntropyPool"]
+    }
+  ],
+
+  // cron: ANU QRNG から定期的に一滴取ってプールへ(scheduled ハンドラ)
+  // 30分おき。ANUのレート/枯渇に合わせて調整すること。
+  "triggers": {
+    "crons": ["*/30 * * * *"]
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}

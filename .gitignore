@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+dist/
+
+# ローカルの secret / 環境変数(コミット禁止)
+.dev.vars
+.env
+*.local
