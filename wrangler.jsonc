@@ -2,7 +2,7 @@
   // 乱数の管 — Cloudflare Worker 設定
   // デプロイ前に:  npx wrangler secret put INGEST_TOKEN
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "rng-pipe",
+  "name": "kuda",
   "main": "src/index.ts",
   "compatibility_date": "2025-01-01",
 
