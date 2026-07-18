@@ -246,10 +246,10 @@ export class EntropyPool {
       .toArray()[0].t;
 
     return json({
-      // デプロイ日時。Worker がヘッダで渡す値を優先し、無ければ DO の env、
-      // それも無ければ "dev"(ローカル)。デプロイごとに自動更新。
-      version: req.headers.get("X-Deploy-Version")
-        || this.env.CF_VERSION_METADATA?.timestamp || "dev",
+      // デプロイ日付(YYYY-MM-DD)。Worker がヘッダで渡す値を優先し、無ければ
+      // DO の env、それも無ければ "dev"。ISO日時から日付部分だけ取り出す。
+      version: (req.headers.get("X-Deploy-Version")
+        || this.env.CF_VERSION_METADATA?.timestamp || "dev").split("T")[0],
       pool_remaining: this.poolCount(),
       total_drops: drops.n,
       last_drop_at: drops.last,
