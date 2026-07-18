@@ -31,6 +31,12 @@
     }
   ],
 
+  // デプロイごとに自動採番されるバージョン情報(id/tag/timestamp)を実行時に取得。
+  // /status がこの timestamp(=デプロイ日時)を version として返す。手動更新不要。
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
+
   // cron: ANU QRNG から補充(scheduled ハンドラ)
   // 1日1回、UTC 03:00 = JST 12:00(お昼)。1回1024バイト取れば
   // 1日1024滴の補充力があり、消費がそれ未満なら足りる。
