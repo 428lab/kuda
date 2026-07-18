@@ -10,9 +10,6 @@
 //   - 枯渇時は503。疑似乱数へのフォールバックはしない(管が空なら空と言う)
 //   - 全ドロップは drops 表に監査ログとして残る(粒の出自 source も記録)
 
-// デプロイ確認用のバージョン印。/status に出るので、デプロイが反映されたか判定できる。
-const VERSION = "cron-internal-1";
-
 // ANU QRNG エンドポイントの既定値。wrangler.jsonc の vars で上書き可能。
 const DEFAULT_ANU_API_URL = "https://qrng.anu.edu.au/API/jsonI.php";
 const DEFAULT_ANU_REFILL_LENGTH = 1;
@@ -26,6 +23,7 @@ export interface Env {
   INGEST_TOKEN: string; // wrangler secret put INGEST_TOKEN
   ANU_API_URL?: string; // QRNGエンドポイント (default: DEFAULT_ANU_API_URL)
   ANU_REFILL_LENGTH?: string; // cron一回あたりの取得バイト数 (default: 1)
+  CF_VERSION_METADATA?: WorkerVersionMetadata; // デプロイ日時(timestamp)等。version_metadata バインディング
 }
 
 // env から ANU リクエストURLを組み立てる。type=uint8 は固定(0-255の粒)。
@@ -42,8 +40,15 @@ export default {
     // 公開パスのみ DO へ転送。未知パス(cron専用の内部パス含む)は 404。
     const url = new URL(req.url);
     if (!PUBLIC_PATHS.has(url.pathname)) return json({ error: "not found" }, 404);
-    const id = env.POOL.idFromName("main");
-    return env.POOL.get(id).fetch(req);
+    const stub = env.POOL.get(env.POOL.idFromName("main"));
+    // /status はデプロイ日時を返す。version_metadata は Worker の env で確実に
+    // 取れるので、ヘッダで DO へ渡す(DOのenvに伝播しないケースへの保険)。
+    if (url.pathname === "/status") {
+      const headers = new Headers(req.headers);
+      headers.set("X-Deploy-Version", env.CF_VERSION_METADATA?.timestamp || "dev");
+      return stub.fetch(new Request(url.toString(), { method: "GET", headers }));
+    }
+    return stub.fetch(req);
   },
 
   // cron (wrangler.jsonc の triggers) — ANUから定期的に一滴取ってプールへ。
@@ -120,7 +125,7 @@ export class EntropyPool {
       // cron専用: 内部からのみ到達(Worker fetch が転送しない)。認証不要。
       if (req.method === "POST" && url.pathname === "/__cron_refill") return await this.refillFromAnu(req, true);
       if (req.method === "GET" && url.pathname === "/drop") return this.drop();
-      if (req.method === "GET" && url.pathname === "/status") return this.status();
+      if (req.method === "GET" && url.pathname === "/status") return this.status(req);
       return json({ error: "not found" }, 404);
     } catch (e) {
       return json({ error: String(e) }, 500);
@@ -230,7 +235,7 @@ export class EntropyPool {
   }
 
   // GET /status — 残量と履歴の概観(消費しない)
-  private status(): Response {
+  private status(req: Request): Response {
     const drops = this.sql
       .exec<{ n: number; last: string | null }>(
         "SELECT COUNT(*) AS n, MAX(drawn_at) AS last FROM drops"
@@ -241,7 +246,10 @@ export class EntropyPool {
       .toArray()[0].t;
 
     return json({
-      version: VERSION,          // デプロイ反映確認用
+      // デプロイ日付(YYYY-MM-DD)。Worker がヘッダで渡す値を優先し、無ければ
+      // DO の env、それも無ければ "dev"。ISO日時から日付部分だけ取り出す。
+      version: (req.headers.get("X-Deploy-Version")
+        || this.env.CF_VERSION_METADATA?.timestamp || "dev").split("T")[0],
       pool_remaining: this.poolCount(),
       total_drops: drops.n,
       last_drop_at: drops.last,
