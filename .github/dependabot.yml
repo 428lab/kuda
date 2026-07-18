@@ -1,0 +1,11 @@
+# サプライチェーン対策: 依存更新PRを「公開から7日」経ってから出す(cooldown)。
+# その間に悪性リリースが検出・撤回される猶予を稼ぐ。
+# セキュリティ修正(CVE)は cooldown 免除で即PRが来る。
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7

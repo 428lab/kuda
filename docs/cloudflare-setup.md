@@ -6,7 +6,7 @@
 
 ## 前提
 
-- Node.js 18+ とローカルのシェル
+- Node.js 18+ と **pnpm**(`corepack enable` で有効化、または `npm i -g pnpm`)
 - Cloudflare アカウント(**無料プランでOK**)
 
 このWorkerは **SQLite-backed Durable Objects** を使う(`wrangler.jsonc` の
@@ -23,8 +23,8 @@
 
 ```sh
 cd kuda
-npm install
-npx wrangler login      # ブラウザが開いて認可
+pnpm install
+pnpm exec wrangler login   # ブラウザが開いて認可
 ```
 
 CI等でブラウザが使えない場合は、代わりに API トークンを環境変数で渡す:
@@ -43,8 +43,8 @@ export CLOUDFLARE_ACCOUNT_ID=<アカウントID>
 `/refill` と `/ingest` の Bearer 認証に使う。**長いランダム値**を生成して登録する。
 
 ```sh
-openssl rand -hex 32                 # ← 出力をコピー
-npx wrangler secret put INGEST_TOKEN # ← プロンプトに貼り付け
+openssl rand -hex 32                      # ← 出力をコピー
+pnpm exec wrangler secret put INGEST_TOKEN # ← プロンプトに貼り付け
 ```
 
 - この値は Worker 側 (secret) と、補充スクリプト `scripts/replenish.py` の
@@ -55,7 +55,7 @@ npx wrangler secret put INGEST_TOKEN # ← プロンプトに貼り付け
 ## 4. デプロイ
 
 ```sh
-npx wrangler deploy
+pnpm run deploy
 ```
 
 - Durable Object バインディング (`POOL`) と SQLite マイグレーション (`v1`) が適用される。
@@ -103,7 +103,7 @@ curl $URL/drop
 
 ```sh
 cp .dev.vars.example .dev.vars   # INGEST_TOKEN を入れる
-npm run dev                      # http://127.0.0.1:8787 で起動
+pnpm run dev                     # http://127.0.0.1:8787 で起動
 ```
 
 ## トラブルシューティング

@@ -2,6 +2,7 @@
   "name": "kuda",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.33.0",
   "description": "乱数の管 — Cloudflare Worker entropy pool (ANU QRNG API版)",
   "scripts": {
     "dev": "wrangler dev",
@@ -12,5 +13,9 @@
     "@cloudflare/workers-types": "^4.20250101.0",
     "typescript": "^7.0.2",
     "wrangler": "^3.99.0"
+  },
+  "pnpm": {
+    "//": "pnpm は依存の postinstall を既定でブロックする(サプライチェーン対策)。wrangler のビルドツールチェーンだけ明示的に許可し、他は遮断のまま。",
+    "onlyBuiltDependencies": ["esbuild", "workerd"]
   }
 }
