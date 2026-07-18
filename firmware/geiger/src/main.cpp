@@ -20,6 +20,7 @@
 #include "config.h"
 
 #if TEST_MODE
+#include "esp_random.h"  // esp_random()(TEST_MODE のみ使用。core 3.x で要明示)
 static const char *SOURCE = "test";
 #else
 static const char *SOURCE = "geiger";
@@ -348,7 +349,8 @@ void loop() {
   }
 
   // 送信(200 のときだけキューをクリア=二重投入しない)
-  if (WiFi.status() == WL_CONNECTED && shouldSend() && millis() >= nextAttemptMs) {
+  if (WiFi.status() == WL_CONNECTED && shouldSend() &&
+      (int32_t)(millis() - nextAttemptMs) >= 0) {
     if (postIngest()) {
       sendQueueLen = 0;
       queueFull = false;
