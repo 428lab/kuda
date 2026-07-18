@@ -1,0 +1,5 @@
+# 実際の設定(WiFi/トークン等)はコミットしない
+include/config.h
+
+# PlatformIO
+.pio/
