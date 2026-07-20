@@ -110,7 +110,10 @@ Nostr管理者ログインが壊れた際の緊急経路として残している
 - `POST /api/admin/users/:id/ban` / `unban` — ユーザーの ban 切替(ban で当人の全鍵が401/403)
 
 ダッシュボード(`/`)に管理者としてログインすると「管理者」セクションが出る。
-管理者pubkeyの設定は `wrangler.jsonc` の `vars.ADMIN_PUBKEYS`。
+管理者pubkey は **ダッシュボードで Secret `ADMIN_PUBKEYS`**(hex, カンマ区切り)として
+設定する(`npx wrangler secret put ADMIN_PUBKEYS`)。pubkey は公開情報だが Secret に置く
+理由は、`wrangler.jsonc` の `vars` に書くと `deploy` がダッシュボードの値を上書きで
+消すのに対し、**Secret はデプロイで上書きされず repo にも残らない**ため。
 
 ## デプロイ
 
