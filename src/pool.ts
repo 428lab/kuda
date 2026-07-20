@@ -124,6 +124,17 @@ export class EntropyPool {
   // 運用パラメータの既定値(settings 未設定時のフォールバック)。
   private static readonly DEFAULT_MAX_KEYS = 5;
   private static readonly DEFAULT_KEY_QUOTA = 30;
+  // env(ANON_DAILY_LIMIT)も settings も無い場合の最終フォールバック。
+  private static readonly DEFAULT_ANON_LIMIT = 3000;
+
+  // 匿名共有の日次上限の実効値: env(ANON_DAILY_LIMIT)をブートストラップ既定とし、
+  // settings に anon_daily_limit があれば管理者設定でそれを上書きする。
+  private anonDailyLimit(): number {
+    const parsed = Number(this.env.ANON_DAILY_LIMIT);
+    const envDefault = Number.isFinite(parsed) && parsed >= 0
+      ? Math.floor(parsed) : EntropyPool.DEFAULT_ANON_LIMIT;
+    return this.getIntSetting("anon_daily_limit", envDefault);
+  }
 
   // settings テーブルから整数値を読む。未設定・非数値なら fallback。
   private getIntSetting(key: string, fallback: number): number {
@@ -268,9 +279,7 @@ export class EntropyPool {
     const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
     // "1" / "true" を有効と解釈(誤設定 "true" が黙って警告モードに落ちる事故の防止)
     const requireKey = ["1", "true"].includes((this.env.REQUIRE_API_KEY ?? "").toLowerCase());
-    const anonLimitParsed = Number(this.env.ANON_DAILY_LIMIT);
-    const anonLimit = Number.isFinite(anonLimitParsed) && anonLimitParsed >= 0
-      ? Math.floor(anonLimitParsed) : 200;
+    const anonLimit = this.anonDailyLimit();
 
     let keyId: number | null = null;
     let warning: string | undefined;
@@ -697,17 +706,18 @@ export class EntropyPool {
     return json({
       max_keys_per_user: this.getIntSetting("max_keys_per_user", EntropyPool.DEFAULT_MAX_KEYS),
       default_daily_quota: this.getIntSetting("default_daily_quota", EntropyPool.DEFAULT_KEY_QUOTA),
+      anon_daily_limit: this.anonDailyLimit(),
     });
   }
 
-  // POST /api/admin/settings  { max_keys_per_user?, default_daily_quota? }
+  // POST /api/admin/settings  { max_keys_per_user?, default_daily_quota?, anon_daily_limit? }
   // 指定された項目のみ更新。既存キーには遡及しない(default_daily_quota は以後の新規発行に効く)。
   private async apiAdminSetSettings(req: Request, url: URL): Promise<Response> {
     const csrf = csrfViolation(req, url);
     if (csrf) return json({ error: csrf }, 400);
     if (!(await this.adminSession(req))) return json({ error: "forbidden" }, 403);
     const body = (await req.json().catch(() => ({}))) as {
-      max_keys_per_user?: number; default_daily_quota?: number;
+      max_keys_per_user?: number; default_daily_quota?: number; anon_daily_limit?: number;
     };
 
     if (body.max_keys_per_user !== undefined) {
@@ -726,11 +736,20 @@ export class EntropyPool {
         "INSERT INTO settings (key, value) VALUES ('default_daily_quota', ?) " +
           "ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(v));
     }
+    if (body.anon_daily_limit !== undefined) {
+      const v = Number(body.anon_daily_limit);
+      if (!Number.isInteger(v) || v < 0 || v > 1000000)
+        return json({ error: "invalid anon_daily_limit (0..1000000)" }, 400);
+      this.sql.exec(
+        "INSERT INTO settings (key, value) VALUES ('anon_daily_limit', ?) " +
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(v));
+    }
 
     return json({
       ok: true,
       max_keys_per_user: this.getIntSetting("max_keys_per_user", EntropyPool.DEFAULT_MAX_KEYS),
       default_daily_quota: this.getIntSetting("default_daily_quota", EntropyPool.DEFAULT_KEY_QUOTA),
+      anon_daily_limit: this.anonDailyLimit(),
     });
   }
 
