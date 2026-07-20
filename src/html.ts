@@ -131,6 +131,16 @@ async function renderDashboard(newKey) {
     '<button id="create">キーを発行</button></div>' +
     '<p class="muted">有効キーは5本まで。クォータは既定30滴/日(変更は管理者へ)。</p>';
 
+  // 分布と一様性検定
+  html += "<h2>分布と一様性検定</h2>";
+  html += '<div class="row"><label>対象: <select id="statscope"><option value="all">全体</option>';
+  for (const k of keys) {
+    html += '<option value="' + esc(k.key_id) + '">' + esc(k.key_prefix) + "… " + esc(k.label) + "</option>";
+  }
+  html += "</select></label>";
+  html += ' <label><input type="checkbox" id="agg32"> 32ビンに集約</label></div>';
+  html += '<div id="stats" class="muted">読み込み中…</div>';
+
   app.innerHTML = html;
 
   document.getElementById("logout").addEventListener("click", async () => {
@@ -161,6 +171,66 @@ async function renderDashboard(newKey) {
       await renderDashboard();
     });
   }
+
+  const scopeEl = document.getElementById("statscope");
+  const aggEl = document.getElementById("agg32");
+  scopeEl.addEventListener("change", loadStats);
+  aggEl.addEventListener("change", loadStats);
+  loadStats();
+}
+
+// SVG棒グラフを文字列で組み立てる(外部リソース不要・CSPに抵触しない)。
+function svgHistogram(hist, n) {
+  const W = 640, H = 170, PAD = 12, bins = hist.length;
+  const bw = W / bins;
+  const max = Math.max(1, ...hist);
+  const exp = n / bins;
+  const y = (v) => H - PAD - (v / max) * (H - 2 * PAD);
+  let bars = "";
+  for (let i = 0; i < bins; i++) {
+    const yy = y(hist[i]);
+    bars += '<rect x="' + (i * bw).toFixed(2) + '" y="' + yy.toFixed(2) +
+      '" width="' + Math.max(0.6, bw - 0.3).toFixed(2) + '" height="' + (H - PAD - yy).toFixed(2) +
+      '" fill="#4a90d9"></rect>';
+  }
+  const ey = y(exp).toFixed(2);
+  const expLine = '<line x1="0" y1="' + ey + '" x2="' + W + '" y2="' + ey +
+    '" stroke="#c33" stroke-width="1" stroke-dasharray="4 3"></line>';
+  return '<svg viewBox="0 0 ' + W + " " + H + '" width="100%" height="170" ' +
+    'style="border:1px solid #8884;background:#8881" role="img" ' +
+    'aria-label="バイト値の分布ヒストグラム">' + bars + expLine + "</svg>";
+}
+
+function aggregate(hist, groups) {
+  const size = hist.length / groups;
+  const out = new Array(groups).fill(0);
+  for (let i = 0; i < hist.length; i++) out[Math.floor(i / size)] += hist[i];
+  return out;
+}
+
+async function loadStats() {
+  const stats = document.getElementById("stats");
+  const scope = document.getElementById("statscope").value;
+  const agg = document.getElementById("agg32").checked;
+  stats.textContent = "読み込み中…";
+  const res = await api("/api/stats?key_id=" + encodeURIComponent(scope));
+  if (res.status !== 200) { stats.textContent = "取得失敗: " + (res.body.error || res.status); return; }
+  const b = res.body;
+  if (b.n === 0) { stats.innerHTML = '<p class="muted">まだ払い出しがありません。</p>'; return; }
+  const hist = agg ? aggregate(b.histogram, 32) : b.histogram;
+  const pStr = b.p_value === null ? "—" : b.p_value.toFixed(4);
+  const verdict = b.p_value === null ? "" :
+    (b.p_value > 0.05 ? " (一様と矛盾しない)" : " (⚠ 一様から逸脱の疑い)");
+  let html = svgHistogram(hist, b.n);
+  html += '<p class="muted">赤い破線 = 一様なら期待される水準。棒がそこに揃うほど健全。</p>';
+  html += "<table>" +
+    "<tr><th>サンプル数 n</th><td>" + b.n + "</td></tr>" +
+    "<tr><th>χ²(df=" + b.df + ")</th><td>" + b.chi2 + "</td></tr>" +
+    "<tr><th>p値</th><td>" + esc(pStr) + esc(verdict) + "</td></tr>" +
+    "</table>";
+  html += '<p class="muted">' + esc(b.note) + "</p>";
+  if (!b.sufficient) html += '<p class="error">サンプル不足のため参考値です。</p>';
+  stats.innerHTML = html;
 }
 
 renderDashboard();

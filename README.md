@@ -82,6 +82,15 @@ curl -H "Authorization: Bearer kuda_..." "https://<worker>/drop?client_id=my-app
 残量と履歴の概観。**消費しない。** ヘルスチェックはこちらを使う。
 `drops_today`(UTC日の消費数)と `version`(デプロイ日付)を含む。
 
+### `GET /api/stats?key_id=<n|all>`
+払い出したバイト値の分布と**一様性検定**。`all`(既定)は誰でも、鍵別(`key_id=<n>`)は
+本人または管理者のみ(要ログイン)。`{n, histogram[256], chi2, df:255, p_value, sufficient, note}`。
+
+> **注意**: 乱数バイト(0–255)は**一様分布**に従うのが正常で、正規分布ではありません。
+> χ²適合度検定(df=255)で一様性を見ます(`p>0.05` なら一様と矛盾しない)。
+> 「複数バイトの合計」は中心極限定理で正規に近づきますが、それは別の話です。
+> ダッシュボード(`/`)にヒストグラムとして表示されます。
+
 ### `POST /refill` (要 `Authorization: Bearer <INGEST_TOKEN>`)
 ANUから手動補充。通常はcronが1日1回(1024バイト)自動実行する。
 
