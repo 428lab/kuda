@@ -49,8 +49,14 @@
   （drops は値を含む監査ログなので鍵素材が残る）。運用秘密は
   `crypto.getRandomValues()`（CSPRNG）で生成する。「疑似乱数フォールバック禁止」は
   `/drop` が払い出す粒の話であり、運用秘密は対象外という区別。
-- **APIキーは `Authorization: Bearer` のみで受け取る**。`?key=` クエリは
-  URL がログに残るため禁止。DB には SHA-256 ハッシュのみ保存し平文は発行時一度きり。
+- **APIキーは原則 `Authorization: Bearer` で受け取る**。`?key=` クエリは
+  **半公開キー（`kudaq_` 種）に限り** `/drop` で受理する（ヘッダ優先。通常キー `kuda_` を
+  `?key=` に貼っても 401）。根拠: TLS 下でクエリは暗号化され実リスクは端点でのURL残留のみ。
+  それを ①呼び出しログ無効化（`observability.logs.invocation_logs:false`）＋自前ログは
+  マスク（`redactKeyInUrl`、`key=kuda_***`）、②`Referrer-Policy: no-referrer`、
+  ③`Cache-Control: no-store` で潰す。被害も read-only/クォータ分のみ・台帳記録・即無効化可。
+  **`/ingest`・`/api/admin/*` はクエリキー不可**（今後も追加しない）。
+  DB には SHA-256 ハッシュのみ保存し平文は発行時一度きり。
 - cron 補充は認証不要の内部専用パス `/__cron_refill`（外部到達不可）。
   公開 `/refill` `/ingest` はトークン必須のまま。
 - cron は日次 `0 3 * * *`（UTC 03:00 = JST 12:00）。

@@ -20,6 +20,8 @@ export const DASHBOARD_HTML = `<!DOCTYPE html>
   .muted { opacity: .65; font-size: .85rem; }
   .newkey { background: #7c31; border: 1px solid #7c36; padding: .8rem; margin: 1rem 0; word-break: break-all; }
   .error { color: #c33; }
+  .badge { display: inline-block; font-size: .72rem; padding: .05rem .4rem; border-radius: .6rem;
+    background: #d9701a22; border: 1px solid #d9701a66; white-space: nowrap; }
   .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .8rem 0; }
   input[type=text] { padding: .35rem .5rem; min-width: 14rem; }
   #app { min-height: 8rem; }
@@ -112,10 +114,12 @@ async function renderDashboard(newKey) {
   if (keys.length === 0) {
     html += '<p class="muted">まだキーがありません。</p>';
   } else {
-    html += "<table><tr><th>キー</th><th>ラベル</th><th>本日</th><th>上限/日</th><th>状態</th><th></th></tr>";
+    html += "<table><tr><th>キー</th><th>種別</th><th>ラベル</th><th>本日</th><th>上限/日</th><th>状態</th><th></th></tr>";
     for (const k of keys) {
+      const isQ = String(k.key_prefix).startsWith("kudaq_");
       html +=
         "<tr><td class=\\"mono\\">" + esc(k.key_prefix) + "…</td>" +
+        "<td>" + (isQ ? '<span class="badge">半公開(URL可)</span>' : "通常") + "</td>" +
         "<td>" + esc(k.label) + "</td>" +
         "<td>" + k.used_today + "</td>" +
         "<td>" + k.daily_quota + "</td>" +
@@ -129,8 +133,12 @@ async function renderDashboard(newKey) {
   html +=
     '<div class="row"><input type="text" id="label" placeholder="ラベル(例: my-app)" maxlength="64">' +
     '<button id="create">キーを発行</button></div>' +
+    '<div class="row"><label><input type="checkbox" id="query-key"> ' +
+      '半公開キー(URL利用可・低クォータ)として発行</label></div>' +
     '<p class="muted">有効キーは' + esc(max_keys) + '本まで。クォータは既定' +
-      esc(default_quota) + '滴/日(変更は管理者へ)。</p>';
+      esc(default_quota) + '滴/日(変更は管理者へ)。<br>' +
+      '通常キーは <code>Authorization: Bearer kuda_…</code> のみ(推奨)。半公開キー(<code>kudaq_…</code>)は ' +
+      '<code>?key=</code> でも引けるが、URL に残ると漏れるので低リスク用途のみに。</p>';
 
   // 分布と一様性検定
   html += "<h2>分布と一様性検定</h2>";
@@ -167,10 +175,12 @@ async function renderDashboard(newKey) {
   });
   document.getElementById("create").addEventListener("click", async () => {
     const label = document.getElementById("label").value;
+    const queryEl = document.getElementById("query-key");
+    const query_allowed = !!(queryEl && queryEl.checked);
     const res = await api("/api/keys", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ label }),
+      body: JSON.stringify({ label, query_allowed }),
     });
     if (res.status !== 200) { alert("発行失敗: " + (res.body.error || res.status)); return; }
     await renderDashboard(res.body.key);

@@ -8,6 +8,8 @@ export function json(body: unknown, status = 200): Response {
       // 真空はキャッシュしない
       "Cache-Control": "no-store, no-cache, must-revalidate",
       "Pragma": "no-cache",
+      // ?key= が Referer 経由で外部へ漏れない(JSON応答なので本来リンクは無いが構造的に遮断)
+      "Referrer-Policy": "no-referrer",
     },
   });
 }
