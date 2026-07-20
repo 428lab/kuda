@@ -9,24 +9,25 @@ import {
 import { newKeypair, signEvent } from "./helpers";
 
 describe("nostr: computeEventId (NIP-01)", () => {
-  it("既知ベクタの id を再現する", () => {
-    // NIP-01 の直列化 [0,pubkey,created_at,kind,tags,content] の sha256。
+  it("固定ベクタの id を再現する", async () => {
+    // NIP-01 直列化 [0,pubkey,created_at,kind,tags,content] の sha256(hex)。
+    // helpers.signEvent(@noble)とは独立に、Web Crypto で期待値を計算して
+    // src の computeEventId を検証する固定ベクタ。
     const ev = {
       id: "",
-      pubkey: "0".repeat(64),
+      pubkey: "0000000000000000000000000000000000000000000000000000000000000001",
       created_at: 1700000000,
       kind: 1,
-      tags: [] as string[][],
+      tags: [["t", "kuda"]] as string[][],
       content: "hello",
       sig: "0".repeat(128),
     };
-    // 手計算に頼らず、署名した本物のイベントで id==computeEventId を確認する
-    const kp = newKeypair();
-    const signed = signEvent(kp, { kind: 1, content: "hello", created_at: 1700000000 });
-    expect(computeEventId(signed)).toBe(signed.id);
-    // content が変われば id も変わる
-    expect(computeEventId({ ...signed, content: "hell0" })).not.toBe(signed.id);
-    void ev;
+    const serialized = JSON.stringify([0, ev.pubkey, ev.created_at, ev.kind, ev.tags, ev.content]);
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serialized));
+    const expected = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+    expect(computeEventId(ev)).toBe(expected);
+    // content が1文字変われば id も変わる(id感度)
+    expect(computeEventId({ ...ev, content: "hell0" })).not.toBe(expected);
   });
 });
 
