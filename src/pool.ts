@@ -10,10 +10,11 @@
 import type { Env } from "./index";
 import { json, timingSafeEqual } from "./util";
 import {
-  API_KEY_PREFIX,
   createSessionCookieValue,
   csrfViolation,
   generateApiKey,
+  isQueryKey,
+  looksLikeApiKey,
   nextUtcMidnightIso,
   parseCookies,
   sanitizeClientId,
@@ -276,7 +277,17 @@ export class EntropyPool {
   // キー無しも許可するが warning を返し、匿名共有の日次上限で保護する。
   private async drop(req: Request, url: URL): Promise<Response> {
     const auth = req.headers.get("Authorization") ?? "";
-    const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    let bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    // ヘッダが無いときだけ ?key= を見る(ヘッダ優先)。クエリレーンは kudaq_ 種のみ受理。
+    // 通常鍵(kuda_)を URL に貼っても無効化し、URL残留の footgun を型で防ぐ。
+    // /ingest・/api/admin/* はこの分岐を通らない(それぞれ Bearer/セッション必須)。
+    if (!bearer) {
+      const qk = url.searchParams.get("key");
+      if (qk) {
+        if (!isQueryKey(qk)) return json({ error: "invalid API key" }, 401);
+        bearer = qk;
+      }
+    }
     // "1" / "true" を有効と解釈(誤設定 "true" が黙って警告モードに落ちる事故の防止)
     const requireKey = ["1", "true"].includes((this.env.REQUIRE_API_KEY ?? "").toLowerCase());
     const anonLimit = this.anonDailyLimit();
@@ -286,7 +297,7 @@ export class EntropyPool {
 
     if (bearer) {
       // キーを明示したリクエストは匿名にフォールバックさせない(誤設定の隠蔽防止)
-      if (!bearer.startsWith(API_KEY_PREFIX)) {
+      if (!looksLikeApiKey(bearer)) {
         return json({ error: "invalid API key" }, 401);
       }
       const hash = await sha256Hex(bearer);
@@ -546,11 +557,13 @@ export class EntropyPool {
     if (active >= maxKeys)
       return json({ error: `key limit reached (max ${maxKeys} active keys)` }, 400);
 
-    const body = (await req.json().catch(() => ({}))) as { label?: string };
+    const body = (await req.json().catch(() => ({}))) as { label?: string; query_allowed?: boolean };
     const label = String(body.label ?? "").replace(/[^\w\s.-]/g, "").slice(0, 64);
+    // 半公開(クエリ利用可)キー。kudaq_ 種として発行し、`?key=` でも使える。
+    const queryAllowed = body.query_allowed === true;
 
     const dailyQuota = this.getIntSetting("default_daily_quota", EntropyPool.DEFAULT_KEY_QUOTA);
-    const { plaintext, prefix } = generateApiKey();
+    const { plaintext, prefix } = generateApiKey(queryAllowed);
     const hash = await sha256Hex(plaintext);
     const now = new Date().toISOString();
     this.sql.exec(
@@ -566,7 +579,10 @@ export class EntropyPool {
       key_id: keyId,
       key_prefix: prefix,
       label,
-      note: "この平文キーは二度と表示されません。安全に保管してください",
+      query_allowed: queryAllowed,
+      note: queryAllowed
+        ? "半公開キー(URL利用可)。?key= でも使えるが URL に残ると漏れる。低リスク用途のみに。二度と表示されません"
+        : "この平文キーは二度と表示されません。安全に保管してください",
     });
   }
 

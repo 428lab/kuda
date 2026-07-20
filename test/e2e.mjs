@@ -202,6 +202,40 @@ if (process.env.ADMIN_SK) {
     await api("/api/admin/settings", { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ max_keys_per_user: 5, default_daily_quota: 30, anon_daily_limit: 3000 }) });
   }
 
+  // ── 半公開キー(kudaq_)と ?key= クエリレーン ──
+  {
+    await seed(8);
+    const qk = await api("/api/keys", { method: "POST", headers: { ...jsonH, Cookie: user.cookie }, body: JSON.stringify({ label: "semi", query_allowed: true }) });
+    check("半公開キーは kudaq_ 種 + query_allowed", qk.status === 200 && qk.body.query_allowed === true && /^kudaq_[0-9a-f]{64}$/.test(qk.body.key));
+    const nk = await api("/api/keys", { method: "POST", headers: { ...jsonH, Cookie: user.cookie }, body: JSON.stringify({ label: "hdr" }) });
+    check("通常キーは kuda_ 種", nk.status === 200 && /^kuda_[0-9a-f]{64}$/.test(nk.body.key));
+    const qKey = qk.body.key, qKeyId = qk.body.key_id, nKey = nk.body.key, nKeyId = nk.body.key_id;
+
+    const qd = await api(`/drop?key=${qKey}`);
+    check("?key=<kudaq> で200", qd.status === 200 && typeof qd.body.value === "number");
+    check("/drop に Referrer-Policy: no-referrer", (qd.headers.get("referrer-policy") || "").toLowerCase() === "no-referrer");
+
+    // 通常鍵を ?key= に貼っても無効(footgun を型で防止)。平文はボディに出ない
+    const nq = await api(`/drop?key=${nKey}`);
+    check("通常鍵を?key=は401", nq.status === 401 && !JSON.stringify(nq.body).includes(nKey));
+    // 形式は合うが存在しない kudaq_ → 401、平文が出ない
+    const fake = "kudaq_" + "0".repeat(64);
+    const fq = await api(`/drop?key=${fake}`);
+    check("不明な kudaq_ は401", fq.status === 401 && !JSON.stringify(fq.body).includes(fake));
+
+    // ヘッダ(通常) + クエリ(kudaq) 併用 → ヘッダ優先で記帳
+    const usedOf = (me, id) => { const k = me.body.keys.find((x) => x.key_id === id); return k ? k.used_today : null; };
+    const before = await api("/api/me", { headers: { Cookie: user.cookie } });
+    await api(`/drop?key=${qKey}`, { headers: { Authorization: `Bearer ${nKey}` } });
+    const after = await api("/api/me", { headers: { Cookie: user.cookie } });
+    check("ヘッダ優先: 通常キーの使用+1", usedOf(after, nKeyId) - usedOf(before, nKeyId) === 1);
+    check("ヘッダ優先: クエリキーは不変", usedOf(after, qKeyId) - usedOf(before, qKeyId) === 0);
+
+    // /ingest・/api/admin/* はクエリキーを認証として扱わない
+    check("/ingest?key=<kudaq> は401", (await api(`/ingest?key=${qKey}`, { method: "POST", headers: { "Content-Type": "application/json", Origin: BASE }, body: "{}" })).status === 401);
+    check("/api/admin/users?key=<kudaq> は403", (await api(`/api/admin/users?key=${qKey}`)).status === 403);
+  }
+
   // quota 変更 → drop クォータに反映(1にして2発目429)
   await seed(4);
   check("管理者 quota変更200", (await api(`/api/admin/keys/${userKeyId}/quota`, { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ daily_quota: 1 }) })).status === 200);

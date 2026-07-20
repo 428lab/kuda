@@ -3,14 +3,18 @@ import {
   createSessionCookieValue,
   csrfViolation,
   generateApiKey,
+  isQueryKey,
+  looksLikeApiKey,
   nextUtcMidnightIso,
   parseCookies,
+  redactKeyInUrl,
   sanitizeClientId,
   sessionSetCookie,
   sha256Hex,
   utcDayStartIso,
   verifySessionCookieValue,
   API_KEY_PREFIX,
+  QUERY_KEY_PREFIX,
 } from "../src/auth";
 
 const SECRET = "test-secret-abcdef";
@@ -32,6 +36,45 @@ describe("auth: APIキー生成", () => {
     expect(await sha256Hex("")).toBe(
       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     );
+  });
+  it("queryLane=true は kudaq_ 種", () => {
+    const { plaintext, prefix } = generateApiKey(true);
+    expect(plaintext).toMatch(/^kudaq_[0-9a-f]{64}$/);
+    expect(prefix).toBe(QUERY_KEY_PREFIX + plaintext.slice(6, 14));
+  });
+});
+
+describe("auth: キー種判定(?key= レーン)", () => {
+  it("isQueryKey は kudaq_ のみ真", () => {
+    expect(isQueryKey(generateApiKey(true).plaintext)).toBe(true);
+    expect(isQueryKey(generateApiKey(false).plaintext)).toBe(false);
+    expect(isQueryKey("kuda_" + "a".repeat(64))).toBe(false);
+  });
+  it("looksLikeApiKey は両種を許容、それ以外は不可", () => {
+    expect(looksLikeApiKey(generateApiKey().plaintext)).toBe(true);
+    expect(looksLikeApiKey(generateApiKey(true).plaintext)).toBe(true);
+    expect(looksLikeApiKey("nope_" + "a".repeat(64))).toBe(false);
+    expect(looksLikeApiKey("")).toBe(false);
+  });
+  it("kudaq_ は kuda_ で始まらない(明確に分離)", () => {
+    expect(QUERY_KEY_PREFIX.startsWith(API_KEY_PREFIX)).toBe(false);
+    expect(API_KEY_PREFIX.startsWith(QUERY_KEY_PREFIX)).toBe(false);
+  });
+});
+
+describe("auth: redactKeyInUrl(ログ用マスク)", () => {
+  it("key クエリ値を kuda_*** に伏せる", () => {
+    const out = redactKeyInUrl("https://x/drop?key=kudaq_" + "a".repeat(64) + "&client_id=z");
+    expect(out).toContain("key=kuda_***");
+    expect(out).not.toContain("aaaa");
+    expect(out).toContain("client_id=z");
+  });
+  it("key が無ければ素通し", () => {
+    expect(redactKeyInUrl("https://x/drop?client_id=z")).toBe("https://x/drop?client_id=z");
+  });
+  it("URLとして解釈できなくても正規表現でマスク", () => {
+    const out = redactKeyInUrl("/drop?key=kudaq_deadbeef&x=1");
+    expect(out).toBe("/drop?key=kuda_***&x=1");
   });
 });
 

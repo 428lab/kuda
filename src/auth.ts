@@ -5,17 +5,47 @@
 // 鍵は運用秘密であって「一滴」ではない — Workers の CSPRNG を使う。
 
 export const API_KEY_PREFIX = "kuda_";
+// 半公開(クエリ利用可)キーの種。`?key=` で受理されるのはこの種のみ。
+// 通常鍵(kuda_)を URL に貼っても無効化することで、URL残留の footgun を型で防ぐ。
+// 目視で区別できるよう別プレフィックスにする。
+export const QUERY_KEY_PREFIX = "kudaq_";
 
-// 32バイトCSPRNG → kuda_ + 64hex。平文は発行時に一度だけ返し、保存はSHA-256のみ。
-export function generateApiKey(): { plaintext: string; prefix: string } {
+// 32バイトCSPRNG → (kuda_|kudaq_) + 64hex。平文は発行時に一度だけ返し、保存はSHA-256のみ。
+export function generateApiKey(queryLane = false): { plaintext: string; prefix: string } {
   const buf = new Uint8Array(32);
   crypto.getRandomValues(buf);
   const hex = Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
+  const p = queryLane ? QUERY_KEY_PREFIX : API_KEY_PREFIX;
   return {
-    plaintext: API_KEY_PREFIX + hex,
+    plaintext: p + hex,
     // 表示・識別用の先頭のみ(秘密ではない)
-    prefix: API_KEY_PREFIX + hex.slice(0, 8),
+    prefix: p + hex.slice(0, 8),
   };
+}
+
+// APIキーの形式判定。ヘッダレーンは両種を、クエリレーンは kudaq_ のみを受理する。
+// 注: "kudaq_" は "kuda_" で始まらない(5文字目が 'q' vs '_')ので両者は明確に分離。
+export function isQueryKey(s: string): boolean {
+  return s.startsWith(QUERY_KEY_PREFIX);
+}
+export function looksLikeApiKey(s: string): boolean {
+  return s.startsWith(API_KEY_PREFIX) || s.startsWith(QUERY_KEY_PREFIX);
+}
+
+// ログ出力用: URL 中の key クエリ値をマスクする(平文キーをログに残さない)。
+// grep で `kuda_***` を探せば「マスク済み」と識別できる。URL をログする箇所は
+// 必ずこれを通すこと(実装規約)。
+export function redactKeyInUrl(u: string): string {
+  try {
+    const url = new URL(u);
+    if (url.searchParams.has("key")) {
+      url.searchParams.set("key", "kuda_***");
+      return url.toString();
+    }
+    return u;
+  } catch {
+    return u.replace(/([?&]key=)[^&#\s]*/gi, "$1kuda_***");
+  }
 }
 
 export async function sha256Hex(s: string): Promise<string> {

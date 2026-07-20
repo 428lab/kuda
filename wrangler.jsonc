@@ -56,6 +56,12 @@
   },
 
   "observability": {
-    "enabled": true
+    "enabled": true,
+    // 呼び出しログ(invocation logs)にはリクエスト URL が入り、?key= の平文が
+    // 残ってしまう。半公開キー(kudaq_)の URL 残留を断つため、呼び出しログは無効化する。
+    // console.* によるログ(cron/ANU エラー等)は引き続き収集される。
+    "logs": {
+      "invocation_logs": false
+    }
   }
 }
