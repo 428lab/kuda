@@ -166,6 +166,31 @@ if (process.env.ADMIN_SK) {
   const victim = list.body.users.find((u) => u.pubkey === upk);
   check("一覧に対象ユーザーと鍵", !!victim && victim.keys.some((k) => k.key_id === userKeyId));
 
+  // ── 発行ポリシー(settings): 管理者が max_keys_per_user / default_daily_quota を変更 ──
+  {
+    check("非管理者 settings GET 403", (await api("/api/admin/settings", { headers: { Cookie: user.cookie } })).status === 403);
+    const set = await api("/api/admin/settings", { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ max_keys_per_user: 1, default_daily_quota: 7 }) });
+    check("管理者 settings POST 200", set.status === 200 && set.body.max_keys_per_user === 1 && set.body.default_daily_quota === 7);
+    check("settings GET が反映値", (await api("/api/admin/settings", { headers: { Cookie: admin.cookie } })).body.default_daily_quota === 7);
+
+    // 設定変更後に新規発行された鍵は既定クォータ 7、キー上限 1 が効く
+    const nsk = schnorr.utils.randomSecretKey();
+    const npk = hex(schnorr.getPublicKey(nsk));
+    const nuser = await loginAs(nsk, npk);
+    const k1 = await api("/api/keys", { method: "POST", headers: { ...jsonH, Cookie: nuser.cookie }, body: JSON.stringify({ label: "a" }) });
+    check("新規ユーザー1本目発行200", k1.status === 200);
+    const me1 = await api("/api/me", { headers: { Cookie: nuser.cookie } });
+    check("新規キーに既定クォータ7が付く", me1.body.keys.find((k) => k.key_id === k1.body.key_id)?.daily_quota === 7);
+    check("/api/me に max_keys/default_quota", me1.body.max_keys === 1 && me1.body.default_quota === 7);
+    check("キー上限1で2本目400", (await api("/api/keys", { method: "POST", headers: { ...jsonH, Cookie: nuser.cookie }, body: JSON.stringify({ label: "b" }) })).status === 400);
+
+    check("settings max_keys範囲外400", (await api("/api/admin/settings", { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ max_keys_per_user: 0 }) })).status === 400);
+    check("settings quota範囲外400", (await api("/api/admin/settings", { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ default_daily_quota: 999999 }) })).status === 400);
+
+    // 既定へ戻す(後続テストへの影響を避ける)
+    await api("/api/admin/settings", { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ max_keys_per_user: 5, default_daily_quota: 30 }) });
+  }
+
   // quota 変更 → drop クォータに反映(1にして2発目429)
   await seed(4);
   check("管理者 quota変更200", (await api(`/api/admin/keys/${userKeyId}/quota`, { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ daily_quota: 1 }) })).status === 200);

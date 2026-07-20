@@ -94,7 +94,7 @@ async function login() {
 async function renderDashboard(newKey) {
   const me = await api("/api/me");
   if (me.status !== 200) { renderLogin(me.body.error); return; }
-  const { pubkey, is_admin, keys } = me.body;
+  const { pubkey, is_admin, keys, max_keys, default_quota } = me.body;
 
   let html =
     '<div class="row"><span class="mono muted">' + esc(pubkey.slice(0, 16)) + "…</span>" +
@@ -129,7 +129,8 @@ async function renderDashboard(newKey) {
   html +=
     '<div class="row"><input type="text" id="label" placeholder="ラベル(例: my-app)" maxlength="64">' +
     '<button id="create">キーを発行</button></div>' +
-    '<p class="muted">有効キーは5本まで。クォータは既定30滴/日(変更は管理者へ)。</p>';
+    '<p class="muted">有効キーは' + esc(max_keys) + '本まで。クォータは既定' +
+      esc(default_quota) + '滴/日(変更は管理者へ)。</p>';
 
   // 分布と一様性検定
   html += "<h2>分布と一様性検定</h2>";
@@ -142,7 +143,16 @@ async function renderDashboard(newKey) {
   html += '<div id="stats" class="muted">読み込み中…</div>';
 
   if (is_admin) {
-    html += '<h2>管理者</h2><div class="row"><button id="loadadmin">ユーザー/キー一覧を読み込む</button></div>';
+    html += "<h2>管理者</h2>";
+    html += '<h3>発行ポリシー</h3>' +
+      '<div class="row"><label>1人あたり有効キー上限 ' +
+      '<input type="number" id="set-maxkeys" min="1" max="1000" style="width:6em"></label></div>' +
+      '<div class="row"><label>新規キーの既定クォータ(滴/日) ' +
+      '<input type="number" id="set-quota" min="0" max="100000" style="width:8em"></label></div>' +
+      '<div class="row"><button id="savesettings">保存</button> ' +
+      '<span id="settingsmsg" class="muted"></span></div>' +
+      '<p class="muted">既定クォータの変更は<b>以後の新規発行</b>に効く(既存キーは各行の「上限変更」で個別に)。</p>';
+    html += '<h3>ユーザー/キー</h3><div class="row"><button id="loadadmin">一覧を読み込む</button></div>';
     html += '<div id="admin"></div>';
   }
 
@@ -185,6 +195,37 @@ async function renderDashboard(newKey) {
 
   const loadAdminBtn = document.getElementById("loadadmin");
   if (loadAdminBtn) loadAdminBtn.addEventListener("click", loadAdmin);
+
+  const saveSettingsBtn = document.getElementById("savesettings");
+  if (saveSettingsBtn) {
+    loadSettings();
+    saveSettingsBtn.addEventListener("click", saveSettings);
+  }
+}
+
+async function loadSettings() {
+  const res = await api("/api/admin/settings");
+  if (res.status !== 200) return;
+  document.getElementById("set-maxkeys").value = res.body.max_keys_per_user;
+  document.getElementById("set-quota").value = res.body.default_daily_quota;
+}
+
+async function saveSettings() {
+  const msg = document.getElementById("settingsmsg");
+  const maxKeys = Number(document.getElementById("set-maxkeys").value);
+  const quota = Number(document.getElementById("set-quota").value);
+  if (!Number.isInteger(maxKeys) || maxKeys < 1 || maxKeys > 1000) {
+    msg.textContent = "有効キー上限は1..1000の整数で"; return;
+  }
+  if (!Number.isInteger(quota) || quota < 0 || quota > 100000) {
+    msg.textContent = "既定クォータは0..100000の整数で"; return;
+  }
+  const res = await api("/api/admin/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ max_keys_per_user: maxKeys, default_daily_quota: quota }),
+  });
+  msg.textContent = res.status === 200 ? "保存しました" : "失敗: " + (res.body.error || res.status);
 }
 
 async function adminPost(path, confirmMsg, body) {
