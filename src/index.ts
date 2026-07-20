@@ -47,6 +47,7 @@ export default {
           // 外部リソース不使用。JSは /app.js のみ、styleは<style>タグのみ許可
           "Content-Security-Policy":
             "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'",
+          "X-Content-Type-Options": "nosniff",
           "Cache-Control": "no-store",
         },
       });
@@ -55,6 +56,7 @@ export default {
       return new Response(DASHBOARD_JS, {
         headers: {
           "Content-Type": "text/javascript; charset=utf-8",
+          "X-Content-Type-Options": "nosniff",
           "Cache-Control": "no-store",
         },
       });

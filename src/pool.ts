@@ -123,7 +123,7 @@ export class EntropyPool {
       // ── NIP-07 ログイン + セッションAPI(認証導入計画 PR-3) ──
       if (req.method === "GET" && url.pathname === "/auth/challenge") return this.issueChallenge();
       if (req.method === "POST" && url.pathname === "/auth/nostr") return await this.authNostr(req, url);
-      if (req.method === "POST" && url.pathname === "/auth/logout") return this.authLogout(url);
+      if (req.method === "POST" && url.pathname === "/auth/logout") return this.authLogout(req, url);
       if (req.method === "GET" && url.pathname === "/api/me") return await this.apiMe(req);
       if (req.method === "POST" && url.pathname === "/api/keys") return await this.apiCreateKey(req, url);
       {
@@ -430,7 +430,10 @@ export class EntropyPool {
   }
 
   // POST /auth/logout — Cookie削除(セッションはステートレスなのでDB操作なし)
-  private authLogout(url: URL): Response {
+  // CSRFチェックはクロスサイトの強制ログアウト(嫌がらせ)防止。
+  private authLogout(req: Request, url: URL): Response {
+    const csrf = csrfViolation(req, url);
+    if (csrf) return json({ error: csrf }, 400);
     const res = json({ ok: true });
     res.headers.set("Set-Cookie", sessionSetCookie("", url.hostname, 0));
     return res;

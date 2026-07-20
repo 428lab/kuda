@@ -121,7 +121,7 @@ async function renderDashboard(newKey) {
         "<td>" + k.daily_quota + "</td>" +
         "<td>" + (k.disabled_at ? "無効" : "有効") + "</td>" +
         "<td>" + (k.disabled_at ? "" :
-          '<button class="disable" data-id="' + k.key_id + '">無効化</button>') + "</td></tr>";
+          '<button class="disable" data-id="' + esc(k.key_id) + '">無効化</button>') + "</td></tr>";
     }
     html += "</table>";
   }
