@@ -108,6 +108,31 @@ export class EntropyPool {
         created_at TEXT NOT NULL
       );
     `);
+
+    // 管理者が変更できる運用パラメータ(key-value)。未設定なら getIntSetting の
+    // フォールバック既定値が効くので、初期シードは不要。
+    //   max_keys_per_user   … 1ユーザーが持てる有効キー数の上限(既定 5)
+    //   default_daily_quota … 新規ユーザーキーに付く既定の日次クォータ(既定 30)
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+  }
+
+  // 運用パラメータの既定値(settings 未設定時のフォールバック)。
+  private static readonly DEFAULT_MAX_KEYS = 5;
+  private static readonly DEFAULT_KEY_QUOTA = 30;
+
+  // settings テーブルから整数値を読む。未設定・非数値なら fallback。
+  private getIntSetting(key: string, fallback: number): number {
+    const row = this.sql
+      .exec<{ value: string }>("SELECT value FROM settings WHERE key = ?", key)
+      .toArray()[0];
+    if (!row) return fallback;
+    const n = Number(row.value);
+    return Number.isFinite(n) ? Math.floor(n) : fallback;
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -135,6 +160,8 @@ export class EntropyPool {
       }
       // ── 管理者API(認証導入計画 PR-6。セッションpubkey ∈ ADMIN_PUBKEYS 必須) ──
       if (req.method === "GET" && url.pathname === "/api/admin/users") return await this.apiAdminUsers(req);
+      if (req.method === "GET" && url.pathname === "/api/admin/settings") return await this.apiAdminGetSettings(req);
+      if (req.method === "POST" && url.pathname === "/api/admin/settings") return await this.apiAdminSetSettings(req, url);
       {
         let m: RegExpMatchArray | null;
         if (req.method === "POST" && (m = url.pathname.match(/^\/api\/admin\/keys\/(\d+)\/disable$/)))
@@ -480,7 +507,13 @@ export class EntropyPool {
       .toArray()
       .map((k) => ({ ...k, used_today: this.usedToday(k.key_id) }));
 
-    return json({ pubkey, is_admin: this.isAdmin(pubkey), keys });
+    return json({
+      pubkey,
+      is_admin: this.isAdmin(pubkey),
+      keys,
+      max_keys: this.getIntSetting("max_keys_per_user", EntropyPool.DEFAULT_MAX_KEYS),
+      default_quota: this.getIntSetting("default_daily_quota", EntropyPool.DEFAULT_KEY_QUOTA),
+    });
   }
 
   // POST /api/keys — 自分の鍵を発行(有効鍵は5本まで)。平文は一度だけ返す。
@@ -496,21 +529,24 @@ export class EntropyPool {
     if (!user) return json({ error: "not logged in" }, 401);
     if (user.banned_at) return json({ error: "account banned" }, 403);
 
+    const maxKeys = this.getIntSetting("max_keys_per_user", EntropyPool.DEFAULT_MAX_KEYS);
     const active = this.sql
       .exec<{ n: number }>(
         "SELECT COUNT(*) AS n FROM api_keys WHERE user_id = ? AND disabled_at IS NULL", user.user_id)
       .toArray()[0].n;
-    if (active >= 5) return json({ error: "key limit reached (max 5 active keys)" }, 400);
+    if (active >= maxKeys)
+      return json({ error: `key limit reached (max ${maxKeys} active keys)` }, 400);
 
     const body = (await req.json().catch(() => ({}))) as { label?: string };
     const label = String(body.label ?? "").replace(/[^\w\s.-]/g, "").slice(0, 64);
 
+    const dailyQuota = this.getIntSetting("default_daily_quota", EntropyPool.DEFAULT_KEY_QUOTA);
     const { plaintext, prefix } = generateApiKey();
     const hash = await sha256Hex(plaintext);
     const now = new Date().toISOString();
     this.sql.exec(
-      "INSERT INTO api_keys (user_id, key_hash, key_prefix, label, created_at) VALUES (?, ?, ?, ?, ?)",
-      user.user_id, hash, prefix, label, now
+      "INSERT INTO api_keys (user_id, key_hash, key_prefix, label, daily_quota, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      user.user_id, hash, prefix, label, dailyQuota, now
     );
     const keyId = this.sql
       .exec<{ id: number }>("SELECT last_insert_rowid() AS id")
@@ -653,6 +689,49 @@ export class EntropyPool {
     if (!key) return json({ error: "key not found" }, 404);
     this.sql.exec("UPDATE api_keys SET daily_quota = ? WHERE key_id = ?", q, keyId);
     return json({ ok: true, key_id: keyId, daily_quota: q });
+  }
+
+  // GET /api/admin/settings — 運用パラメータの現在値。
+  private async apiAdminGetSettings(req: Request): Promise<Response> {
+    if (!(await this.adminSession(req))) return json({ error: "forbidden" }, 403);
+    return json({
+      max_keys_per_user: this.getIntSetting("max_keys_per_user", EntropyPool.DEFAULT_MAX_KEYS),
+      default_daily_quota: this.getIntSetting("default_daily_quota", EntropyPool.DEFAULT_KEY_QUOTA),
+    });
+  }
+
+  // POST /api/admin/settings  { max_keys_per_user?, default_daily_quota? }
+  // 指定された項目のみ更新。既存キーには遡及しない(default_daily_quota は以後の新規発行に効く)。
+  private async apiAdminSetSettings(req: Request, url: URL): Promise<Response> {
+    const csrf = csrfViolation(req, url);
+    if (csrf) return json({ error: csrf }, 400);
+    if (!(await this.adminSession(req))) return json({ error: "forbidden" }, 403);
+    const body = (await req.json().catch(() => ({}))) as {
+      max_keys_per_user?: number; default_daily_quota?: number;
+    };
+
+    if (body.max_keys_per_user !== undefined) {
+      const v = Number(body.max_keys_per_user);
+      if (!Number.isInteger(v) || v < 1 || v > 1000)
+        return json({ error: "invalid max_keys_per_user (1..1000)" }, 400);
+      this.sql.exec(
+        "INSERT INTO settings (key, value) VALUES ('max_keys_per_user', ?) " +
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(v));
+    }
+    if (body.default_daily_quota !== undefined) {
+      const v = Number(body.default_daily_quota);
+      if (!Number.isInteger(v) || v < 0 || v > 100000)
+        return json({ error: "invalid default_daily_quota (0..100000)" }, 400);
+      this.sql.exec(
+        "INSERT INTO settings (key, value) VALUES ('default_daily_quota', ?) " +
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(v));
+    }
+
+    return json({
+      ok: true,
+      max_keys_per_user: this.getIntSetting("max_keys_per_user", EntropyPool.DEFAULT_MAX_KEYS),
+      default_daily_quota: this.getIntSetting("default_daily_quota", EntropyPool.DEFAULT_KEY_QUOTA),
+    });
   }
 
   // POST /api/admin/users/:id/ban | /unban — ユーザーの ban 切り替え。
