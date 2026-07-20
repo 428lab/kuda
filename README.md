@@ -76,7 +76,8 @@ curl -H "Authorization: Bearer kuda_..." "https://<worker>/drop?client_id=my-app
 - 無効/不明キー: `401`
 
 **移行期間**: 現在 `REQUIRE_API_KEY=0` のため、キー無しでも動作するが
-レスポンスに `warning` が付く(匿名は共有の日次上限 `ANON_DAILY_LIMIT` で保護)。
+レスポンスに `warning` が付く(匿名は共有の日次上限で保護。既定は `ANON_DAILY_LIMIT`、
+管理者が `/api/admin/settings` の `anon_daily_limit` で変更可能)。
 移行完了後に `1` へフリップされるとキー必須になる。
 
 ### `GET /status`
@@ -106,9 +107,11 @@ Nostr管理者ログインが壊れた際の緊急経路として残している
 ### 管理者API `GET/POST /api/admin/*`
 セッションの pubkey が `ADMIN_PUBKEYS`(hex, カンマ区切り)に含まれる場合のみ(それ以外は403)。
 - `GET /api/admin/users` — 全ユーザー + 各鍵(本日使用量つき)+ システム鍵
-- `GET/POST /api/admin/settings` — 発行ポリシー(`max_keys_per_user` 1..1000 /
-  `default_daily_quota` 0..100000)の取得・変更。`default_daily_quota` は**以後の
-  新規発行**に適用(既存鍵は各鍵の quota 変更で個別に)
+- `GET/POST /api/admin/settings` — 発行ポリシーの取得・変更。項目は
+  `max_keys_per_user`(1..1000)/ `default_daily_quota`(0..100000)/
+  `anon_daily_limit`(0..1000000)。`default_daily_quota` は**以後の新規発行**に適用
+  (既存鍵は各鍵の quota 変更で個別に)。`anon_daily_limit` は移行期間中の匿名共有上限で、
+  `wrangler.jsonc` の `ANON_DAILY_LIMIT` を既定値とし、ここで設定すると上書きする
 - `POST /api/admin/keys/:id/disable` — 任意の鍵を無効化
 - `POST /api/admin/keys/:id/quota` — `{"daily_quota": n}` で任意の鍵のクォータ変更
 - `POST /api/admin/users/:id/ban` / `unban` — ユーザーの ban 切替(ban で当人の全鍵が401/403)

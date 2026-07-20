@@ -149,9 +149,12 @@ async function renderDashboard(newKey) {
       '<input type="number" id="set-maxkeys" min="1" max="1000" style="width:6em"></label></div>' +
       '<div class="row"><label>新規キーの既定クォータ(滴/日) ' +
       '<input type="number" id="set-quota" min="0" max="100000" style="width:8em"></label></div>' +
+      '<div class="row"><label>匿名共有の日次上限(滴/日) ' +
+      '<input type="number" id="set-anon" min="0" max="1000000" style="width:9em"></label></div>' +
       '<div class="row"><button id="savesettings">保存</button> ' +
       '<span id="settingsmsg" class="muted"></span></div>' +
-      '<p class="muted">既定クォータの変更は<b>以後の新規発行</b>に効く(既存キーは各行の「上限変更」で個別に)。</p>';
+      '<p class="muted">既定クォータの変更は<b>以後の新規発行</b>に効く(既存キーは各行の「上限変更」で個別に)。' +
+      '匿名共有の日次上限は、キー無しアクセス全体の合計/日(移行期間中のみ)。</p>';
     html += '<h3>ユーザー/キー</h3><div class="row"><button id="loadadmin">一覧を読み込む</button></div>';
     html += '<div id="admin"></div>';
   }
@@ -208,22 +211,27 @@ async function loadSettings() {
   if (res.status !== 200) return;
   document.getElementById("set-maxkeys").value = res.body.max_keys_per_user;
   document.getElementById("set-quota").value = res.body.default_daily_quota;
+  document.getElementById("set-anon").value = res.body.anon_daily_limit;
 }
 
 async function saveSettings() {
   const msg = document.getElementById("settingsmsg");
   const maxKeys = Number(document.getElementById("set-maxkeys").value);
   const quota = Number(document.getElementById("set-quota").value);
+  const anon = Number(document.getElementById("set-anon").value);
   if (!Number.isInteger(maxKeys) || maxKeys < 1 || maxKeys > 1000) {
     msg.textContent = "有効キー上限は1..1000の整数で"; return;
   }
   if (!Number.isInteger(quota) || quota < 0 || quota > 100000) {
     msg.textContent = "既定クォータは0..100000の整数で"; return;
   }
+  if (!Number.isInteger(anon) || anon < 0 || anon > 1000000) {
+    msg.textContent = "匿名共有の日次上限は0..1000000の整数で"; return;
+  }
   const res = await api("/api/admin/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ max_keys_per_user: maxKeys, default_daily_quota: quota }),
+    body: JSON.stringify({ max_keys_per_user: maxKeys, default_daily_quota: quota, anon_daily_limit: anon }),
   });
   msg.textContent = res.status === 200 ? "保存しました" : "失敗: " + (res.body.error || res.status);
 }

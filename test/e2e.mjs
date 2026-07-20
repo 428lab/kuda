@@ -187,8 +187,19 @@ if (process.env.ADMIN_SK) {
     check("settings max_keys範囲外400", (await api("/api/admin/settings", { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ max_keys_per_user: 0 }) })).status === 400);
     check("settings quota範囲外400", (await api("/api/admin/settings", { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ default_daily_quota: 999999 }) })).status === 400);
 
+    // 匿名共有上限(anon_daily_limit): 0 にすると匿名 /drop が即429、キー付きは無影響
+    const setA = await api("/api/admin/settings", { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ anon_daily_limit: 0 }) });
+    check("settings anon POST 200 + 反映", setA.status === 200 && setA.body.anon_daily_limit === 0);
+    check("settings GET に anon_daily_limit", typeof (await api("/api/admin/settings", { headers: { Cookie: admin.cookie } })).body.anon_daily_limit === "number");
+    await seed(2);
+    const anonDrop = await api("/drop");
+    check("匿名上限0で匿名/drop 429", anonDrop.status === 429 && anonDrop.body.error === "anonymous daily limit exceeded");
+    const keyedDrop = await api("/drop", { headers: { Authorization: `Bearer ${k1.body.key}` } });
+    check("匿名上限0でもキー付き/drop 200", keyedDrop.status === 200);
+    check("settings anon範囲外400", (await api("/api/admin/settings", { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ anon_daily_limit: 1000001 }) })).status === 400);
+
     // 既定へ戻す(後続テストへの影響を避ける)
-    await api("/api/admin/settings", { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ max_keys_per_user: 5, default_daily_quota: 30 }) });
+    await api("/api/admin/settings", { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ max_keys_per_user: 5, default_daily_quota: 30, anon_daily_limit: 3000 }) });
   }
 
   // quota 変更 → drop クォータに反映(1にして2発目429)
