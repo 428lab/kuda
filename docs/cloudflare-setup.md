@@ -45,6 +45,10 @@ export CLOUDFLARE_ACCOUNT_ID=<アカウントID>
 ```sh
 openssl rand -hex 32                      # ← 出力をコピー
 pnpm exec wrangler secret put INGEST_TOKEN # ← プロンプトに貼り付け
+
+# ログインセッションCookie用のHMAC鍵(ダッシュボード機能に必須)
+openssl rand -hex 32
+pnpm exec wrangler secret put SESSION_SECRET
 ```
 
 - この値は Worker 側 (secret) と、補充スクリプト `scripts/replenish.py` の

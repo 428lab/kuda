@@ -16,6 +16,13 @@
   },
   "pnpm": {
     "//": "pnpm は依存の postinstall を既定でブロックする(サプライチェーン対策)。wrangler のビルドツールチェーンだけ明示的に許可し、他は遮断のまま。",
-    "onlyBuiltDependencies": ["esbuild", "workerd"]
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ]
+  },
+  "dependencies": {
+    "@noble/curves": "2.2.0",
+    "@noble/hashes": "2.2.0"
   }
 }

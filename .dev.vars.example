@@ -5,6 +5,12 @@
 
 INGEST_TOKEN="change-me-to-a-long-random-token"
 
+# ログインセッションCookieのHMAC鍵。本番は `wrangler secret put SESSION_SECRET`
+SESSION_SECRET="change-me-to-another-long-random-value"
+
+# 管理者のNostr pubkey(hex, カンマ区切り)。公開情報なので必要なら wrangler.jsonc の vars でも可
+# ADMIN_PUBKEYS="<64hex>,<64hex>"
+
 # vars はデフォルトを wrangler.jsonc に置いてあるので通常は不要。
 # ローカルで上書きしたいときだけ設定する。
 # ANU_API_URL="https://qrng.anu.edu.au/API/jsonI.php"
