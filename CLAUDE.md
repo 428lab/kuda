@@ -28,8 +28,9 @@
 
 - `pnpm install` / `pnpm run typecheck` / `pnpm run dev` / `pnpm run deploy`
   （`deploy` は pnpm 予約語なので必ず `pnpm run deploy`）。
-- PR 前に最低限 **`pnpm run typecheck`** を通す。ランタイムに関わる変更は
-  `pnpm exec wrangler dev` で実挙動も確認する。
+- PR 前に最低限 **`pnpm run typecheck`** と **`pnpm test`**(vitestユニット)を通す。
+  ランタイム/DO に関わる変更は `pnpm exec wrangler dev` +
+  **`pnpm run test:e2e`**(結合E2E)で実挙動も確認する。テスト詳細は `test/README.md`。
 - `pnpm.onlyBuiltDependencies` は `esbuild` / `workerd` のみ許可（他の postinstall は遮断）。
 
 ## サプライチェーン対策
