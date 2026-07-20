@@ -11,13 +11,16 @@ export { EntropyPool } from "./pool";
 
 // 公開APIのパス。Worker の fetch はこれ以外を DO へ転送しない
 // (cron専用の内部パスを外部から叩かせないため)。
-const PUBLIC_PATHS = new Set(["/drop", "/status", "/refill", "/ingest"]);
+// /admin/keys は暫定管理エンドポイント(INGEST_TOKEN必須。PR-5でNostr管理者に置換)。
+const PUBLIC_PATHS = new Set(["/drop", "/status", "/refill", "/ingest", "/admin/keys"]);
 
 export interface Env {
   POOL: DurableObjectNamespace;
   INGEST_TOKEN: string; // wrangler secret put INGEST_TOKEN
   ANU_API_URL?: string; // QRNGエンドポイント (default: pool.ts の DEFAULT_ANU_API_URL)
   ANU_REFILL_LENGTH?: string; // cron一回あたりの取得バイト数 (default: 1)
+  REQUIRE_API_KEY?: string; // "1" で /drop にAPIキー必須(移行完了後にフリップ)
+  ANON_DAILY_LIMIT?: string; // 移行期間中の匿名アクセス共有日次上限 (default: 200)
   CF_VERSION_METADATA?: WorkerVersionMetadata; // デプロイ日時(timestamp)等。version_metadata バインディング
 }
 
