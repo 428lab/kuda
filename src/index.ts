@@ -27,7 +27,7 @@ export interface Env {
   POOL: DurableObjectNamespace;
   INGEST_TOKEN: string; // wrangler secret put INGEST_TOKEN
   SESSION_SECRET?: string; // wrangler secret put SESSION_SECRET(ログインCookieのHMAC鍵)
-  ADMIN_PUBKEYS?: string; // 管理者のNostr pubkey(hex, カンマ区切り。公開情報なのでvarsで可)
+  ADMIN_PUBKEYS?: string; // 管理者のNostr pubkey(hex, カンマ区切り)。wrangler secret put(vars不可: deployで上書き消滅)
   ANU_API_URL?: string; // QRNGエンドポイント (default: pool.ts の DEFAULT_ANU_API_URL)
   ANU_REFILL_LENGTH?: string; // cron一回あたりの取得バイト数 (default: 1)
   REQUIRE_API_KEY?: string; // "1" で /drop にAPIキー必須(移行完了後にフリップ)

@@ -15,10 +15,11 @@
     // 移行期間: "0" = キー無し /drop を警告付きで許可。移行完了後 "1" にフリップ。
     "REQUIRE_API_KEY": "0",
     // 移行期間中の匿名アクセス共有日次上限(補充1024/日の枯渇防止)
-    "ANON_DAILY_LIMIT": "200",
-    // 管理者の Nostr pubkey(hex, カンマ区切り)。pubkey は公開情報なので var で可。
-    // 空なら管理者機能は誰も使えない。設定後デプロイで有効化。
-    "ADMIN_PUBKEYS": ""
+    "ANON_DAILY_LIMIT": "200"
+    // 注: ADMIN_PUBKEYS は vars に置かない。ここに書くと deploy が唯一の正となり、
+    // ダッシュボードで設定した値を上書きで消す。管理者pubkey は Secret として
+    // ダッシュボードに設定する(Secret はデプロイで上書きされず、repo にも残らない)。
+    //   例: npx wrangler secret put ADMIN_PUBKEYS
   },
 
   // EntropyPool は SQLite ストレージ (state.storage.sql) を使うので
