@@ -7,6 +7,7 @@
 // 本体ロジックは src/pool.ts (EntropyPool DO)、共通処理は src/util.ts。
 
 import { json } from "./util";
+import { DASHBOARD_HTML, DASHBOARD_JS } from "./html";
 export { EntropyPool } from "./pool";
 
 // 公開APIのパス。Worker の fetch はこれ以外を DO へ転送しない
@@ -14,9 +15,19 @@ export { EntropyPool } from "./pool";
 // /admin/keys は暫定管理エンドポイント(INGEST_TOKEN必須。PR-5でNostr管理者に置換)。
 const PUBLIC_PATHS = new Set(["/drop", "/status", "/refill", "/ingest", "/admin/keys"]);
 
+// 認証・セッションAPI(PR-3)はプレフィックスで転送を許可。
+// /__cron_refill はどちらにも該当せず、引き続き外部到達不可。
+function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PATHS.has(pathname)
+    || pathname.startsWith("/auth/")
+    || pathname.startsWith("/api/");
+}
+
 export interface Env {
   POOL: DurableObjectNamespace;
   INGEST_TOKEN: string; // wrangler secret put INGEST_TOKEN
+  SESSION_SECRET?: string; // wrangler secret put SESSION_SECRET(ログインCookieのHMAC鍵)
+  ADMIN_PUBKEYS?: string; // 管理者のNostr pubkey(hex, カンマ区切り。公開情報なのでvarsで可)
   ANU_API_URL?: string; // QRNGエンドポイント (default: pool.ts の DEFAULT_ANU_API_URL)
   ANU_REFILL_LENGTH?: string; // cron一回あたりの取得バイト数 (default: 1)
   REQUIRE_API_KEY?: string; // "1" で /drop にAPIキー必須(移行完了後にフリップ)
@@ -26,9 +37,31 @@ export interface Env {
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    // 公開パスのみ DO へ転送。未知パス(cron専用の内部パス含む)は 404。
     const url = new URL(req.url);
-    if (!PUBLIC_PATHS.has(url.pathname)) return json({ error: "not found" }, 404);
+
+    // ダッシュボード静的アセット(Worker直配信・DOに触らない)
+    if (req.method === "GET" && url.pathname === "/") {
+      return new Response(DASHBOARD_HTML, {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          // 外部リソース不使用。JSは /app.js のみ、styleは<style>タグのみ許可
+          "Content-Security-Policy":
+            "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/app.js") {
+      return new Response(DASHBOARD_JS, {
+        headers: {
+          "Content-Type": "text/javascript; charset=utf-8",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    // 公開パスのみ DO へ転送。未知パス(cron専用の内部パス含む)は 404。
+    if (!isPublicPath(url.pathname)) return json({ error: "not found" }, 404);
     const stub = env.POOL.get(env.POOL.idFromName("main"));
     // /status はデプロイ日時を返す。version_metadata は Worker の env で確実に
     // 取れるので、ヘッダで DO へ渡す(DOのenvに伝播しないケースへの保険)。

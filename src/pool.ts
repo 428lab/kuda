@@ -11,12 +11,19 @@ import type { Env } from "./index";
 import { json, timingSafeEqual } from "./util";
 import {
   API_KEY_PREFIX,
+  createSessionCookieValue,
+  csrfViolation,
   generateApiKey,
   nextUtcMidnightIso,
+  parseCookies,
   sanitizeClientId,
+  SESSION_COOKIE,
+  sessionSetCookie,
   sha256Hex,
   utcDayStartIso,
+  verifySessionCookieValue,
 } from "./auth";
+import { getChallengeTag, verifyAuthEvent, type NostrEvent } from "./nostr";
 
 // ANU QRNG エンドポイントの既定値。wrangler.jsonc の vars で上書き可能。
 const DEFAULT_ANU_API_URL = "https://qrng.anu.edu.au/API/jsonI.php";
@@ -92,6 +99,14 @@ export class EntropyPool {
       );
       CREATE INDEX IF NOT EXISTS idx_drops_key_day ON drops(key_id, drawn_at);
     `);
+
+    // NIP-07ログインのチャレンジ(5分失効・単回使用。認証導入計画 PR-3)
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS auth_challenges (
+        challenge  TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL
+      );
+    `);
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -105,6 +120,16 @@ export class EntropyPool {
       if (req.method === "POST" && url.pathname === "/admin/keys") return await this.adminCreateKey(req);
       if (req.method === "GET" && url.pathname === "/drop") return await this.drop(req, url);
       if (req.method === "GET" && url.pathname === "/status") return this.status(req);
+      // ── NIP-07 ログイン + セッションAPI(認証導入計画 PR-3) ──
+      if (req.method === "GET" && url.pathname === "/auth/challenge") return this.issueChallenge();
+      if (req.method === "POST" && url.pathname === "/auth/nostr") return await this.authNostr(req, url);
+      if (req.method === "POST" && url.pathname === "/auth/logout") return this.authLogout(url);
+      if (req.method === "GET" && url.pathname === "/api/me") return await this.apiMe(req);
+      if (req.method === "POST" && url.pathname === "/api/keys") return await this.apiCreateKey(req, url);
+      {
+        const m = url.pathname.match(/^\/api\/keys\/(\d+)\/disable$/);
+        if (req.method === "POST" && m) return await this.apiDisableKey(req, url, Number(m[1]));
+      }
       return json({ error: "not found" }, 404);
     } catch (e) {
       return json({ error: String(e) }, 500);
@@ -198,7 +223,8 @@ export class EntropyPool {
   private async drop(req: Request, url: URL): Promise<Response> {
     const auth = req.headers.get("Authorization") ?? "";
     const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    const requireKey = this.env.REQUIRE_API_KEY === "1";
+    // "1" / "true" を有効と解釈(誤設定 "true" が黙って警告モードに落ちる事故の防止)
+    const requireKey = ["1", "true"].includes((this.env.REQUIRE_API_KEY ?? "").toLowerCase());
     const anonLimitParsed = Number(this.env.ANON_DAILY_LIMIT);
     const anonLimit = Number.isFinite(anonLimitParsed) && anonLimitParsed >= 0
       ? Math.floor(anonLimitParsed) : 200;
@@ -321,6 +347,181 @@ export class EntropyPool {
       daily_quota: dailyQuota,
       note: "この平文キーは二度と表示されません。安全に保管してください",
     });
+  }
+
+  // ── NIP-07 ログイン + セッションAPI ──────────────────────────────
+
+  private static readonly CHALLENGE_TTL_SEC = 300; // 5分
+
+  // セッションCookieを検証して pubkey を返す(未ログイン/無効は null)
+  private async sessionPubkey(req: Request): Promise<string | null> {
+    const secret = this.env.SESSION_SECRET;
+    if (!secret) return null;
+    const value = parseCookies(req.headers.get("Cookie"))[SESSION_COOKIE];
+    if (!value) return null;
+    return verifySessionCookieValue(secret, value);
+  }
+
+  private isAdmin(pubkey: string): boolean {
+    return (this.env.ADMIN_PUBKEYS ?? "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+      .includes(pubkey);
+  }
+
+  // GET /auth/challenge — ログイン用チャレンジ発行(5分失効・単回使用)
+  private issueChallenge(): Response {
+    const now = new Date();
+    // 期限切れ行の掃除(ついで)
+    const cutoff = new Date(now.getTime() - EntropyPool.CHALLENGE_TTL_SEC * 1000).toISOString();
+    this.sql.exec("DELETE FROM auth_challenges WHERE created_at < ?", cutoff);
+
+    const challenge = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, "");
+    this.sql.exec(
+      "INSERT INTO auth_challenges (challenge, created_at) VALUES (?, ?)",
+      challenge, now.toISOString()
+    );
+    return json({ challenge, expires_in: EntropyPool.CHALLENGE_TTL_SEC });
+  }
+
+  // POST /auth/nostr — NIP-07 が署名した kind 22242 イベントでログイン
+  private async authNostr(req: Request, url: URL): Promise<Response> {
+    const csrf = csrfViolation(req, url);
+    if (csrf) return json({ error: csrf }, 400);
+    if (!this.env.SESSION_SECRET) {
+      return json({ error: "SESSION_SECRET not configured" }, 500);
+    }
+
+    const event = (await req.json().catch(() => null)) as NostrEvent | null;
+    const authErr = verifyAuthEvent(event);
+    if (authErr) return json({ error: `auth failed: ${authErr}` }, 401);
+    const ev = event as NostrEvent;
+
+    // challenge の照合: 存在し、5分以内で、単回使用(成否に関わらず消費)
+    const challenge = getChallengeTag(ev);
+    if (!challenge) return json({ error: "auth failed: missing challenge tag" }, 401);
+    const row = this.sql
+      .exec<{ created_at: string }>(
+        "SELECT created_at FROM auth_challenges WHERE challenge = ?", challenge)
+      .toArray()[0];
+    if (row) this.sql.exec("DELETE FROM auth_challenges WHERE challenge = ?", challenge);
+    const cutoff = new Date(Date.now() - EntropyPool.CHALLENGE_TTL_SEC * 1000).toISOString();
+    if (!row || row.created_at < cutoff) {
+      return json({ error: "auth failed: unknown or expired challenge" }, 401);
+    }
+
+    // ユーザー登録(初回)/取得。ban済みはログイン拒否。
+    const now = new Date().toISOString();
+    this.sql.exec(
+      "INSERT INTO users (pubkey, provider, created_at) VALUES (?, 'nostr', ?) ON CONFLICT(pubkey) DO NOTHING",
+      ev.pubkey, now
+    );
+    const user = this.sql
+      .exec<{ user_id: number; banned_at: string | null }>(
+        "SELECT user_id, banned_at FROM users WHERE pubkey = ?", ev.pubkey)
+      .toArray()[0];
+    if (user.banned_at) return json({ error: "account banned" }, 403);
+
+    const cookieValue = await createSessionCookieValue(this.env.SESSION_SECRET, ev.pubkey);
+    const res = json({ ok: true, pubkey: ev.pubkey, is_admin: this.isAdmin(ev.pubkey) });
+    res.headers.set("Set-Cookie", sessionSetCookie(cookieValue, url.hostname));
+    return res;
+  }
+
+  // POST /auth/logout — Cookie削除(セッションはステートレスなのでDB操作なし)
+  private authLogout(url: URL): Response {
+    const res = json({ ok: true });
+    res.headers.set("Set-Cookie", sessionSetCookie("", url.hostname, 0));
+    return res;
+  }
+
+  // GET /api/me — 自分の情報と鍵一覧(used_today付き)
+  private async apiMe(req: Request): Promise<Response> {
+    const pubkey = await this.sessionPubkey(req);
+    if (!pubkey) return json({ error: "not logged in" }, 401);
+    const user = this.sql
+      .exec<{ user_id: number; banned_at: string | null }>(
+        "SELECT user_id, banned_at FROM users WHERE pubkey = ?", pubkey)
+      .toArray()[0];
+    if (!user) return json({ error: "not logged in" }, 401);
+    if (user.banned_at) return json({ error: "account banned" }, 403);
+
+    const keys = this.sql
+      .exec<{ key_id: number; key_prefix: string; label: string; daily_quota: number;
+              created_at: string; disabled_at: string | null }>(
+        "SELECT key_id, key_prefix, label, daily_quota, created_at, disabled_at FROM api_keys WHERE user_id = ? ORDER BY key_id",
+        user.user_id)
+      .toArray()
+      .map((k) => ({ ...k, used_today: this.usedToday(k.key_id) }));
+
+    return json({ pubkey, is_admin: this.isAdmin(pubkey), keys });
+  }
+
+  // POST /api/keys — 自分の鍵を発行(有効鍵は5本まで)。平文は一度だけ返す。
+  private async apiCreateKey(req: Request, url: URL): Promise<Response> {
+    const csrf = csrfViolation(req, url);
+    if (csrf) return json({ error: csrf }, 400);
+    const pubkey = await this.sessionPubkey(req);
+    if (!pubkey) return json({ error: "not logged in" }, 401);
+    const user = this.sql
+      .exec<{ user_id: number; banned_at: string | null }>(
+        "SELECT user_id, banned_at FROM users WHERE pubkey = ?", pubkey)
+      .toArray()[0];
+    if (!user) return json({ error: "not logged in" }, 401);
+    if (user.banned_at) return json({ error: "account banned" }, 403);
+
+    const active = this.sql
+      .exec<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM api_keys WHERE user_id = ? AND disabled_at IS NULL", user.user_id)
+      .toArray()[0].n;
+    if (active >= 5) return json({ error: "key limit reached (max 5 active keys)" }, 400);
+
+    const body = (await req.json().catch(() => ({}))) as { label?: string };
+    const label = String(body.label ?? "").replace(/[^\w\s.-]/g, "").slice(0, 64);
+
+    const { plaintext, prefix } = generateApiKey();
+    const hash = await sha256Hex(plaintext);
+    const now = new Date().toISOString();
+    this.sql.exec(
+      "INSERT INTO api_keys (user_id, key_hash, key_prefix, label, created_at) VALUES (?, ?, ?, ?, ?)",
+      user.user_id, hash, prefix, label, now
+    );
+    const keyId = this.sql
+      .exec<{ id: number }>("SELECT last_insert_rowid() AS id")
+      .toArray()[0].id;
+
+    return json({
+      key: plaintext,           // ← 保存されない。この応答でのみ取得可能
+      key_id: keyId,
+      key_prefix: prefix,
+      label,
+      note: "この平文キーは二度と表示されません。安全に保管してください",
+    });
+  }
+
+  // POST /api/keys/:id/disable — 自分の鍵を無効化(冪等)
+  private async apiDisableKey(req: Request, url: URL, keyId: number): Promise<Response> {
+    const csrf = csrfViolation(req, url);
+    if (csrf) return json({ error: csrf }, 400);
+    const pubkey = await this.sessionPubkey(req);
+    if (!pubkey) return json({ error: "not logged in" }, 401);
+    const user = this.sql
+      .exec<{ user_id: number }>("SELECT user_id FROM users WHERE pubkey = ?", pubkey)
+      .toArray()[0];
+    if (!user) return json({ error: "not logged in" }, 401);
+
+    const key = this.sql
+      .exec<{ key_id: number }>(
+        "SELECT key_id FROM api_keys WHERE key_id = ? AND user_id = ?", keyId, user.user_id)
+      .toArray()[0];
+    if (!key) return json({ error: "key not found" }, 404);
+
+    this.sql.exec(
+      "UPDATE api_keys SET disabled_at = COALESCE(disabled_at, ?) WHERE key_id = ?",
+      new Date().toISOString(), keyId
+    );
+    return json({ ok: true, key_id: keyId });
   }
 
   // GET /status — 残量と履歴の概観(消費しない)
