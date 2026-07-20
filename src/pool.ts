@@ -24,6 +24,7 @@ import {
   verifySessionCookieValue,
 } from "./auth";
 import { getChallengeTag, verifyAuthEvent, type NostrEvent } from "./nostr";
+import { uniformityReport } from "./stats";
 
 // ANU QRNG エンドポイントの既定値。wrangler.jsonc の vars で上書き可能。
 const DEFAULT_ANU_API_URL = "https://qrng.anu.edu.au/API/jsonI.php";
@@ -125,6 +126,7 @@ export class EntropyPool {
       if (req.method === "POST" && url.pathname === "/auth/nostr") return await this.authNostr(req, url);
       if (req.method === "POST" && url.pathname === "/auth/logout") return this.authLogout(req, url);
       if (req.method === "GET" && url.pathname === "/api/me") return await this.apiMe(req);
+      if (req.method === "GET" && url.pathname === "/api/stats") return await this.apiStats(req, url);
       if (req.method === "POST" && url.pathname === "/api/keys") return await this.apiCreateKey(req, url);
       {
         const m = url.pathname.match(/^\/api\/keys\/(\d+)\/disable$/);
@@ -500,6 +502,54 @@ export class EntropyPool {
       key_prefix: prefix,
       label,
       note: "この平文キーは二度と表示されません。安全に保管してください",
+    });
+  }
+
+  // GET /api/stats?key_id=<n|all> — 払い出したバイトの分布と一様性検定。
+  // 全体(all/未指定)は誰でも可。鍵別は本人 or 管理者のみ。
+  private async apiStats(req: Request, url: URL): Promise<Response> {
+    const keyParam = url.searchParams.get("key_id");
+    let where = "";
+    const args: unknown[] = [];
+
+    if (keyParam && keyParam !== "all") {
+      const keyId = Number(keyParam);
+      if (!Number.isInteger(keyId) || keyId < 1) return json({ error: "invalid key_id" }, 400);
+      const pubkey = await this.sessionPubkey(req);
+      if (!pubkey) return json({ error: "not logged in" }, 401);
+      if (!this.isAdmin(pubkey)) {
+        const user = this.sql
+          .exec<{ user_id: number }>("SELECT user_id FROM users WHERE pubkey = ?", pubkey)
+          .toArray()[0];
+        const owns = user && this.sql
+          .exec<{ one: number }>(
+            "SELECT 1 AS one FROM api_keys WHERE key_id = ? AND user_id = ?", keyId, user.user_id)
+          .toArray()[0];
+        if (!owns) return json({ error: "forbidden" }, 403);
+      }
+      where = "WHERE key_id = ?";
+      args.push(keyId);
+    }
+
+    const rows = this.sql
+      .exec<{ byte: number; c: number }>(
+        `SELECT byte, COUNT(*) AS c FROM drops ${where} GROUP BY byte`, ...args)
+      .toArray();
+    const histogram = new Array<number>(256).fill(0);
+    for (const r of rows) {
+      if (r.byte >= 0 && r.byte <= 255) histogram[r.byte] = r.c;
+    }
+
+    const report = uniformityReport(histogram);
+    return json({
+      scope: keyParam && keyParam !== "all" ? { key_id: Number(keyParam) } : "all",
+      n: report.n,
+      histogram: report.histogram,
+      chi2: Math.round(report.chi2 * 100) / 100,
+      df: report.df,
+      p_value: report.p_value === null ? null : Math.round(report.p_value * 10000) / 10000,
+      sufficient: report.sufficient,
+      note: report.note,
     });
   }
 

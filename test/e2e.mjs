@@ -121,6 +121,17 @@ check("/admin/keys 無トークン401", (await api("/admin/keys", { method: "POS
   check("改ざんCookie401", (await api("/api/me", { headers: { Cookie: cookie.slice(0, -4) + "aaaa" } })).status === 401);
 }
 
+// ── 統計 /api/stats ──
+{
+  // これまでの drop で全体統計に n>0 が入っているはず
+  const s = await api("/api/stats?key_id=all");
+  check("/api/stats all 200", s.status === 200 && Array.isArray(s.body.histogram) && s.body.histogram.length === 256);
+  check("/api/stats に chi2/df/p_value/n/note", s.body.df === 255 && "chi2" in s.body && "p_value" in s.body && typeof s.body.n === "number" && !!s.body.note);
+  // 鍵別統計は未ログインだと401
+  check("鍵別統計は未ログイン401", (await api("/api/stats?key_id=1")).status === 401);
+  check("不正key_idは400", (await api("/api/stats?key_id=abc")).status === 400);
+}
+
 // ── 既存経路の不変 ──
 check("/__cron_refill 外部404", (await api("/__cron_refill", { method: "POST" })).status === 404);
 check("/refill 無トークン401", (await api("/refill", { method: "POST" })).status === 401);
