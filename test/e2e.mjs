@@ -132,6 +132,66 @@ check("/admin/keys 無トークン401", (await api("/admin/keys", { method: "POS
   check("不正key_idは400", (await api("/api/stats?key_id=abc")).status === 400);
 }
 
+// ── 管理者API(ADMIN_SK が設定され、サーバの ADMIN_PUBKEYS に対応pubkeyが入っている前提) ──
+if (process.env.ADMIN_SK) {
+  const skHex = process.env.ADMIN_SK;
+  const asdk = unhex(skHex);
+  const apk = hex(schnorr.getPublicKey(asdk));
+  const jsonH = { "Content-Type": "application/json", "Origin": BASE };
+  async function loginAs(sk, pk) {
+    const ch = await api("/auth/challenge");
+    const ev = signEvent(sk, pk, { tags: [["challenge", ch.body.challenge]] });
+    const r = await api("/auth/nostr", { method: "POST", headers: jsonH, body: JSON.stringify(ev) });
+    return { cookie: (r.headers.get("set-cookie") || "").split(";")[0], is_admin: r.body.is_admin };
+  }
+
+  const admin = await loginAs(asdk, apk);
+  check("管理者ログインで is_admin=true", admin.is_admin === true);
+
+  // 一般ユーザーを作る(このユーザーの user_id/鍵を admin が操作する)
+  const usk = schnorr.utils.randomSecretKey();
+  const upk = hex(schnorr.getPublicKey(usk));
+  const user = await loginAs(usk, upk);
+  const uk = await api("/api/keys", { method: "POST", headers: { ...jsonH, Cookie: user.cookie }, body: JSON.stringify({ label: "victim" }) });
+  const userKey = uk.body.key, userKeyId = uk.body.key_id;
+
+  // 非管理者は /api/admin/* が403
+  check("非管理者 /api/admin/users 403", (await api("/api/admin/users", { headers: { Cookie: user.cookie } })).status === 403);
+  // 未ログインも403
+  check("未ログイン /api/admin/users 403", (await api("/api/admin/users")).status === 403);
+
+  // 管理者は一覧取得
+  const list = await api("/api/admin/users", { headers: { Cookie: admin.cookie } });
+  check("管理者 /api/admin/users 200", list.status === 200 && Array.isArray(list.body.users));
+  const victim = list.body.users.find((u) => u.pubkey === upk);
+  check("一覧に対象ユーザーと鍵", !!victim && victim.keys.some((k) => k.key_id === userKeyId));
+
+  // quota 変更 → drop クォータに反映(1にして2発目429)
+  await seed(4);
+  check("管理者 quota変更200", (await api(`/api/admin/keys/${userKeyId}/quota`, { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ daily_quota: 1 }) })).status === 200);
+  const d1 = await api("/drop", { headers: { Authorization: `Bearer ${userKey}` } });
+  const d2 = await api("/drop", { headers: { Authorization: `Bearer ${userKey}` } });
+  check("quota=1で2発目429", d1.status === 200 && d2.status === 429);
+
+  // ban → そのユーザーの鍵で /drop が403
+  check("管理者 ban 200", (await api(`/api/admin/users/${victim.user_id}/ban`, { method: "POST", headers: { ...jsonH, Cookie: admin.cookie } })).status === 200);
+  check("ban後は鍵で /drop 403", (await api("/drop", { headers: { Authorization: `Bearer ${userKey}` } })).status === 403);
+  check("ban後は /api/me 403", (await api("/api/me", { headers: { Cookie: user.cookie } })).status === 403);
+  // unban で復帰
+  check("管理者 unban 200", (await api(`/api/admin/users/${victim.user_id}/unban`, { method: "POST", headers: { ...jsonH, Cookie: admin.cookie } })).status === 200);
+  check("unban後は /api/me 200", (await api("/api/me", { headers: { Cookie: user.cookie } })).status === 200);
+
+  // admin が任意の鍵を無効化
+  check("管理者 鍵無効化200", (await api(`/api/admin/keys/${userKeyId}/disable`, { method: "POST", headers: { ...jsonH, Cookie: admin.cookie } })).status === 200);
+  check("無効化後は /drop 401", (await api("/drop", { headers: { Authorization: `Bearer ${userKey}` } })).status === 401);
+
+  // 不正入力
+  check("quota範囲外400", (await api(`/api/admin/keys/${userKeyId}/quota`, { method: "POST", headers: { ...jsonH, Cookie: admin.cookie }, body: JSON.stringify({ daily_quota: -1 }) })).status === 400);
+  check("存在しない鍵404", (await api(`/api/admin/keys/999999/disable`, { method: "POST", headers: { ...jsonH, Cookie: admin.cookie } })).status === 404);
+} else {
+  console.log("(ADMIN_SK 未設定のため管理者テストはスキップ)");
+}
+
 // ── 既存経路の不変 ──
 check("/__cron_refill 外部404", (await api("/__cron_refill", { method: "POST" })).status === 404);
 check("/refill 無トークン401", (await api("/refill", { method: "POST" })).status === 401);

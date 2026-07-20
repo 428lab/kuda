@@ -141,6 +141,11 @@ async function renderDashboard(newKey) {
   html += ' <label><input type="checkbox" id="agg32"> 32ビンに集約</label></div>';
   html += '<div id="stats" class="muted">読み込み中…</div>';
 
+  if (is_admin) {
+    html += '<h2>管理者</h2><div class="row"><button id="loadadmin">ユーザー/キー一覧を読み込む</button></div>';
+    html += '<div id="admin"></div>';
+  }
+
   app.innerHTML = html;
 
   document.getElementById("logout").addEventListener("click", async () => {
@@ -177,6 +182,85 @@ async function renderDashboard(newKey) {
   scopeEl.addEventListener("change", loadStats);
   aggEl.addEventListener("change", loadStats);
   loadStats();
+
+  const loadAdminBtn = document.getElementById("loadadmin");
+  if (loadAdminBtn) loadAdminBtn.addEventListener("click", loadAdmin);
+}
+
+async function adminPost(path, confirmMsg, body) {
+  if (confirmMsg && !confirm(confirmMsg)) return false;
+  const res = await api(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  if (res.status !== 200) { alert("失敗: " + (res.body.error || res.status)); return false; }
+  return true;
+}
+
+function keyRowAdmin(k) {
+  return "<tr><td class=\\"mono\\">" + esc(k.key_prefix) + "…</td>" +
+    "<td>" + esc(k.label) + "</td>" +
+    "<td>" + k.used_today + "/" + k.daily_quota + "</td>" +
+    "<td>" + (k.disabled_at ? "無効" : "有効") + "</td>" +
+    '<td><button class="a-quota" data-id="' + esc(k.key_id) + '">上限変更</button> ' +
+    (k.disabled_at ? "" : '<button class="a-disable" data-id="' + esc(k.key_id) + '">無効化</button>') +
+    "</td></tr>";
+}
+
+async function loadAdmin() {
+  const el = document.getElementById("admin");
+  el.textContent = "読み込み中…";
+  const res = await api("/api/admin/users");
+  if (res.status !== 200) { el.textContent = "取得失敗: " + (res.body.error || res.status); return; }
+  const { users, system_keys } = res.body;
+
+  let html = "";
+  for (const u of users) {
+    const banned = !!u.banned_at;
+    html += '<div class="admin-user">' +
+      '<div class="row"><span class="mono">' + esc(u.pubkey.slice(0, 16)) + "…</span>" +
+      (banned ? ' <b class="error">BANNED</b>' : "") +
+      ' <button class="a-ban" data-id="' + esc(u.user_id) + '" data-ban="' + (banned ? "0" : "1") + '">' +
+      (banned ? "ban解除" : "ban") + "</button></div>";
+    if (u.keys.length) {
+      html += "<table><tr><th>キー</th><th>ラベル</th><th>本日/上限</th><th>状態</th><th></th></tr>";
+      for (const k of u.keys) html += keyRowAdmin(k);
+      html += "</table>";
+    } else {
+      html += '<p class="muted">キーなし</p>';
+    }
+    html += "</div>";
+  }
+  if (system_keys.length) {
+    html += "<h3>システム鍵(user_id なし・/admin/keys 発行)</h3>";
+    html += "<table><tr><th>キー</th><th>ラベル</th><th>本日/上限</th><th>状態</th><th></th></tr>";
+    for (const k of system_keys) html += keyRowAdmin(k);
+    html += "</table>";
+  }
+  el.innerHTML = html || '<p class="muted">ユーザーがいません。</p>';
+
+  for (const btn of el.querySelectorAll("button.a-ban")) {
+    btn.addEventListener("click", async () => {
+      const ban = btn.dataset.ban === "1";
+      const path = "/api/admin/users/" + btn.dataset.id + (ban ? "/ban" : "/unban");
+      if (await adminPost(path, ban ? "このユーザーをbanしますか?" : null)) loadAdmin();
+    });
+  }
+  for (const btn of el.querySelectorAll("button.a-disable")) {
+    btn.addEventListener("click", async () => {
+      if (await adminPost("/api/admin/keys/" + btn.dataset.id + "/disable", "この鍵を無効化しますか?")) loadAdmin();
+    });
+  }
+  for (const btn of el.querySelectorAll("button.a-quota")) {
+    btn.addEventListener("click", async () => {
+      const v = prompt("新しい日次クォータ(0..100000)");
+      if (v === null) return;
+      const q = Number(v);
+      if (!Number.isInteger(q) || q < 0 || q > 100000) { alert("0..100000の整数で"); return; }
+      if (await adminPost("/api/admin/keys/" + btn.dataset.id + "/quota", null, { daily_quota: q })) loadAdmin();
+    });
+  }
 }
 
 // SVG棒グラフを文字列で組み立てる(外部リソース不要・CSPに抵触しない)。

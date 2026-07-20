@@ -17,11 +17,13 @@ PRごとに自動実行される。
 DO(SQLite)を跨ぐ全経路を、実行中の `wrangler dev` に対して検証する。
 
 ```sh
-# 端末A
-printf 'INGEST_TOKEN="test-token"\nSESSION_SECRET="test-secret"\n' > .dev.vars
+# 端末A(管理者テストも回すなら ADMIN_PUBKEYS に固定テスト鍵の pubkey を入れる)
+printf 'INGEST_TOKEN="test-token"\nSESSION_SECRET="test-secret"\nADMIN_PUBKEYS="1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f"\n' > .dev.vars
 pnpm dev --local --port 8787
-# 端末B
-BASE=http://127.0.0.1:8787 INGEST_TOKEN=test-token pnpm run test:e2e
+# 端末B(ADMIN_SK を渡すと管理者API(ban/quota/disable)も検証。省略時はスキップ)
+BASE=http://127.0.0.1:8787 INGEST_TOKEN=test-token \
+  ADMIN_SK=0101010101010101010101010101010101010101010101010101010101010101 \
+  pnpm run test:e2e
 ```
 
 検証内容: /drop の pop一回性・drop_seq単調、クォータ429、不明キー401、

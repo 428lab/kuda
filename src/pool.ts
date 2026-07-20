@@ -117,7 +117,8 @@ export class EntropyPool {
       if (req.method === "POST" && url.pathname === "/refill") return await this.refillFromAnu(req);
       // cron専用: 内部からのみ到達(Worker fetch が転送しない)。認証不要。
       if (req.method === "POST" && url.pathname === "/__cron_refill") return await this.refillFromAnu(req, true);
-      // 暫定管理: ダッシュボード(PR-3以降)完成前にレガシー案件へ鍵を配る橋。PR-5で置換。
+      // break-glass: INGEST_TOKEN でシステム鍵(user_id NULL)を発行。レガシー案件用 +
+      // Nostr管理者ログインが壊れた際の緊急経路として残す(管理者APIは /api/admin/*)。
       if (req.method === "POST" && url.pathname === "/admin/keys") return await this.adminCreateKey(req);
       if (req.method === "GET" && url.pathname === "/drop") return await this.drop(req, url);
       if (req.method === "GET" && url.pathname === "/status") return this.status(req);
@@ -131,6 +132,19 @@ export class EntropyPool {
       {
         const m = url.pathname.match(/^\/api\/keys\/(\d+)\/disable$/);
         if (req.method === "POST" && m) return await this.apiDisableKey(req, url, Number(m[1]));
+      }
+      // ── 管理者API(認証導入計画 PR-6。セッションpubkey ∈ ADMIN_PUBKEYS 必須) ──
+      if (req.method === "GET" && url.pathname === "/api/admin/users") return await this.apiAdminUsers(req);
+      {
+        let m: RegExpMatchArray | null;
+        if (req.method === "POST" && (m = url.pathname.match(/^\/api\/admin\/keys\/(\d+)\/disable$/)))
+          return await this.apiAdminDisableKey(req, url, Number(m[1]));
+        if (req.method === "POST" && (m = url.pathname.match(/^\/api\/admin\/keys\/(\d+)\/quota$/)))
+          return await this.apiAdminSetQuota(req, url, Number(m[1]));
+        if (req.method === "POST" && (m = url.pathname.match(/^\/api\/admin\/users\/(\d+)\/ban$/)))
+          return await this.apiAdminBan(req, url, Number(m[1]), true);
+        if (req.method === "POST" && (m = url.pathname.match(/^\/api\/admin\/users\/(\d+)\/unban$/)))
+          return await this.apiAdminBan(req, url, Number(m[1]), false);
       }
       return json({ error: "not found" }, 404);
     } catch (e) {
@@ -369,7 +383,13 @@ export class EntropyPool {
       .split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean)
-      .includes(pubkey);
+      .includes(pubkey.toLowerCase());
+  }
+
+  // セッションが管理者なら pubkey を返す。未ログイン/非管理者は null。
+  private async adminSession(req: Request): Promise<string | null> {
+    const pubkey = await this.sessionPubkey(req);
+    return pubkey && this.isAdmin(pubkey) ? pubkey : null;
   }
 
   // GET /auth/challenge — ログイン用チャレンジ発行(5分失効・単回使用)
@@ -575,6 +595,79 @@ export class EntropyPool {
       new Date().toISOString(), keyId
     );
     return json({ ok: true, key_id: keyId });
+  }
+
+  // ── 管理者API(ADMIN_PUBKEYS のセッションのみ) ──────────────────
+
+  // GET /api/admin/users — 全ユーザー + 各鍵(本日使用量つき)+ システム鍵
+  private async apiAdminUsers(req: Request): Promise<Response> {
+    if (!(await this.adminSession(req))) return json({ error: "forbidden" }, 403);
+
+    const keys = this.sql
+      .exec<{ key_id: number; user_id: number | null; key_prefix: string; label: string;
+              daily_quota: number; created_at: string; disabled_at: string | null }>(
+        "SELECT key_id, user_id, key_prefix, label, daily_quota, created_at, disabled_at FROM api_keys ORDER BY key_id")
+      .toArray()
+      .map((k) => ({ ...k, used_today: this.usedToday(k.key_id) }));
+    const byUser = new Map<number | null, typeof keys>();
+    for (const k of keys) {
+      const list = byUser.get(k.user_id) ?? [];
+      list.push(k);
+      byUser.set(k.user_id, list);
+    }
+
+    const users = this.sql
+      .exec<{ user_id: number; pubkey: string; provider: string; created_at: string; banned_at: string | null }>(
+        "SELECT user_id, pubkey, provider, created_at, banned_at FROM users ORDER BY user_id")
+      .toArray()
+      .map((u) => ({ ...u, keys: byUser.get(u.user_id) ?? [] }));
+
+    return json({ users, system_keys: byUser.get(null) ?? [] });
+  }
+
+  // POST /api/admin/keys/:id/disable — 任意の鍵を無効化(冪等)
+  private async apiAdminDisableKey(req: Request, url: URL, keyId: number): Promise<Response> {
+    const csrf = csrfViolation(req, url);
+    if (csrf) return json({ error: csrf }, 400);
+    if (!(await this.adminSession(req))) return json({ error: "forbidden" }, 403);
+    const key = this.sql.exec<{ key_id: number }>("SELECT key_id FROM api_keys WHERE key_id = ?", keyId).toArray()[0];
+    if (!key) return json({ error: "key not found" }, 404);
+    this.sql.exec(
+      "UPDATE api_keys SET disabled_at = COALESCE(disabled_at, ?) WHERE key_id = ?",
+      new Date().toISOString(), keyId
+    );
+    return json({ ok: true, key_id: keyId });
+  }
+
+  // POST /api/admin/keys/:id/quota  { daily_quota } — 任意の鍵のクォータ変更
+  private async apiAdminSetQuota(req: Request, url: URL, keyId: number): Promise<Response> {
+    const csrf = csrfViolation(req, url);
+    if (csrf) return json({ error: csrf }, 400);
+    if (!(await this.adminSession(req))) return json({ error: "forbidden" }, 403);
+    const body = (await req.json().catch(() => ({}))) as { daily_quota?: number };
+    const q = Number(body.daily_quota);
+    if (!Number.isInteger(q) || q < 0 || q > 100000) {
+      return json({ error: "invalid daily_quota (0..100000)" }, 400);
+    }
+    const key = this.sql.exec<{ key_id: number }>("SELECT key_id FROM api_keys WHERE key_id = ?", keyId).toArray()[0];
+    if (!key) return json({ error: "key not found" }, 404);
+    this.sql.exec("UPDATE api_keys SET daily_quota = ? WHERE key_id = ?", q, keyId);
+    return json({ ok: true, key_id: keyId, daily_quota: q });
+  }
+
+  // POST /api/admin/users/:id/ban | /unban — ユーザーの ban 切り替え。
+  // ban すると /drop(鍵のuser経由)・/api/me・/api/keys が全て弾かれる。
+  private async apiAdminBan(req: Request, url: URL, userId: number, ban: boolean): Promise<Response> {
+    const csrf = csrfViolation(req, url);
+    if (csrf) return json({ error: csrf }, 400);
+    if (!(await this.adminSession(req))) return json({ error: "forbidden" }, 403);
+    const user = this.sql.exec<{ user_id: number }>("SELECT user_id FROM users WHERE user_id = ?", userId).toArray()[0];
+    if (!user) return json({ error: "user not found" }, 404);
+    this.sql.exec(
+      "UPDATE users SET banned_at = ? WHERE user_id = ?",
+      ban ? new Date().toISOString() : null, userId
+    );
+    return json({ ok: true, user_id: userId, banned: ban });
   }
 
   // GET /status — 残量と履歴の概観(消費しない)
