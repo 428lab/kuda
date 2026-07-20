@@ -74,6 +74,11 @@ curl "https://<worker>/drop?key=kudaq_...&client_id=my-app"
 の /drop・当該キーの日次クォータ分のみで、台帳に全消費が残り、ワンクリックで無効化できる。
 書き込み系(`/ingest`)・管理系(`/api/admin/*`)は**クエリキー不可**(ヘッダ/セッション必須)。
 
+> 補足: (a) は Workers の呼び出しログを止めるもの。アカウント側で HTTP request logging /
+> Logpush を別途有効化している場合はそちらに URL が載り得る(本 worker の設定範囲外)。
+> また移行期間中(`REQUIRE_API_KEY` 未設定)でも、`?key=` に**非 `kudaq_` の値**を付けた
+> リクエストは匿名フォールバックせず 401 になる(誤ったキーの無言採用を防ぐため)。
+
 ```json
 {
   "value": 199,
