@@ -177,9 +177,14 @@ sudo systemctl stop tubed
 sudo /usr/local/bin/tubed /etc/tubed/config.toml
 ```
 
-`kernel=` のブロック数が増えていけば ioctl が通っている。**増えないまま
-`recv=` だけ伸びるときは権限不足**で、`カーネルへの注入に失敗` が標準エラーに
-出ている(現状は落ちずに続行するので、この行を見落とすと気づけない)。
+`kernel=` のブロック数が増えていけば ioctl が通っている。TEST_MODE の粒は疑似乱数
+なので推定値には加算せず、`kernel=12blk/0b` のようにビット数は 0 のままになる。
+これは正常で、見るのはブロック数のほう。
+
+権限が足りない場合は、粒を待たずに**起動した時点で**
+`RNDADDENTROPY が拒否された。CAP_SYS_ADMIN が要る` を出して終了する
+(systemd 経由だと `Restart=always` で再起動を繰り返すので、`journalctl -u tubed`
+の先頭を見る)。
 
 > `avail=`(`/proc/sys/kernel/random/entropy_avail`)は **Linux 5.17 以降** —
 > 5.10.119 / 5.15.44 にも backport されている — で 256 に飽和するので、注入しても
@@ -196,8 +201,9 @@ pnpm exec wrangler dev            # http://127.0.0.1:8787
 
 `/etc/tubed/config.toml` の `pipe.url` を一時的に `http://127.0.0.1:8787` にし、
 `token` は `.dev.vars` の `INGEST_TOKEN` に合わせる。`kernel_share` を下げて動かし、
-`last_post=200` になり `pool` が増えれば HTTP 経路は生きている。確認できたら
-`pipe.url` を本番に戻す。
+`last_post=200` になり `pool` が増えれば HTTP 経路は生きている。
+**確認できたら `pipe.url` と `token` の両方を本番の値に戻す**(token を戻し忘れると
+5-3 で `last_post=401` になる)。
 
 ### 5-3. 実パルス
 

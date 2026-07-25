@@ -298,6 +298,13 @@ if (process.env.ADMIN_SK) {
   // nonce 無しは従来どおり(既存クライアントの互換)
   const fourth = await post({ bytes, source: "e2e" });
   check("nonce 無しでも受理される", fourth.status === 200 && fourth.body.duplicate === undefined);
+
+  // 不正な nonce は正規化せずに弾く。削って辻褄を合わせると別の nonce が同じキーに
+  // 潰れ、入れていないバイト列を受理済みと答えて粒が消える。
+  const bad = await post({ bytes, source: "e2e", nonce: "a b.c" });
+  const tooLong = await post({ bytes, source: "e2e", nonce: "x".repeat(65) });
+  check("不正な文字を含む nonce は400", bad.status === 400, `status=${bad.status}`);
+  check("64文字を超える nonce は400", tooLong.status === 400, `status=${tooLong.status}`);
 }
 
 // ── 既存経路の不変 ──

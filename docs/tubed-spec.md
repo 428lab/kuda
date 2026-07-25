@@ -93,7 +93,12 @@ CPM=23 events=1234 recv=12blk | kernel=6blk/1.5Kb avail=256 | kuda=96B last_post
 `RNDADDENTROPY` には `CAP_SYS_ADMIN` が要る(単なる write ではプールに
 混ざるだけで推定値は増えない)。`systemd/tubed.service` は root ではなく
 `User=tubed` + `AmbientCapabilities=CAP_SYS_ADMIN` + `SupplementaryGroups=dialout`
-で最小限に絞る。
+とし、`ProtectSystem=strict` などで周囲を固める(CAP_SYS_ADMIN 自体は事実上
+root 相当なので、これは「最小限」ではなく「root では動かさない」という程度の意味)。
+
+権限は**起動時に長さ0・加算0の `RNDADDENTROPY` を撃って確かめ**、通らなければ
+そこで終了する。粒が来るたびに注入だけ失敗して捨てられ続け、それでもプロセスは
+動いて見える、という状態を作らないため。この要求はプールにも推定値にも触れない。
 
 ## 受け入れ条件
 

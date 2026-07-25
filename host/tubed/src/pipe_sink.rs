@@ -197,15 +197,21 @@ impl PipeSink {
         notes
     }
 
-    fn post(&mut self, index: usize) -> Result<()> {
-        // 送信バッチを固定する。再送では同じ内容を同じ nonce で送る。
-        if self.queues[index].inflight.is_empty() {
-            self.nonce_seq += 1;
-            let nonce = format!("{}-{}", self.run_id, self.nonce_seq);
-            let q = &mut self.queues[index];
-            q.inflight = std::mem::take(&mut q.bytes);
-            q.inflight_nonce = Some(nonce);
+    /// 送信バッチを確定する。未確定のバッチが残っていればそれを使う(再送)。
+    /// 一度確定したら 200 を得るまで内容も nonce も変えない。
+    fn seal_batch(&mut self, index: usize) {
+        if !self.queues[index].inflight.is_empty() {
+            return;
         }
+        self.nonce_seq += 1;
+        let nonce = format!("{}-{}", self.run_id, self.nonce_seq);
+        let q = &mut self.queues[index];
+        q.inflight = std::mem::take(&mut q.bytes);
+        q.inflight_nonce = Some(nonce);
+    }
+
+    fn post(&mut self, index: usize) -> Result<()> {
+        self.seal_batch(index);
 
         let payload = BASE64.encode(&self.queues[index].inflight);
         let source = self.queues[index].source.as_str();
@@ -245,5 +251,108 @@ impl PipeSink {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame::Block;
+
+    fn cfg(queue_max: usize) -> PipeConfig {
+        PipeConfig {
+            url: "http://127.0.0.1:1".into(),
+            token: "dummy".into(),
+            queue_max_bytes: queue_max,
+            send_threshold: 64,
+            send_min: 32,
+            idle_secs: 600,
+            backoff_min_secs: 30,
+            backoff_max_secs: 600,
+            timeout_secs: 1,
+        }
+    }
+
+    fn block(source: Source, seq: u32, len: usize) -> Block {
+        Block {
+            boot_id: 1,
+            seq,
+            events: 512,
+            source,
+            bytes: vec![0xAB; len],
+        }
+    }
+
+    #[test]
+    fn seal_fixes_batch_and_nonce() {
+        let mut p = PipeSink::new(cfg(4096)).unwrap();
+        assert_eq!(p.push(&block(Source::Geiger, 0, 32)), Push::Accepted);
+        p.seal_batch(0);
+
+        let nonce = p.queues[0].inflight_nonce.clone().unwrap();
+        assert_eq!(p.queues[0].inflight.len(), 32);
+        assert!(p.queues[0].bytes.is_empty());
+
+        // 再送では内容も nonce も変えない。混ぜると Worker の冪等判定で
+        // 追加分まで受理済み扱いになり、粒が消える。
+        assert_eq!(p.push(&block(Source::Geiger, 1, 32)), Push::Accepted);
+        p.seal_batch(0);
+        assert_eq!(p.queues[0].inflight.len(), 32);
+        assert_eq!(p.queues[0].inflight_nonce.as_deref(), Some(nonce.as_str()));
+        assert_eq!(p.queues[0].bytes.len(), 32); // 後の粒は次のバッチへ
+    }
+
+    #[test]
+    fn nonce_differs_between_batches() {
+        let mut p = PipeSink::new(cfg(4096)).unwrap();
+        p.push(&block(Source::Geiger, 0, 32));
+        p.seal_batch(0);
+        let first = p.queues[0].inflight_nonce.clone().unwrap();
+
+        p.queues[0].inflight.clear(); // 200 を得た体
+        p.queues[0].inflight_nonce = None;
+        p.push(&block(Source::Geiger, 1, 32));
+        p.seal_batch(0);
+
+        assert_ne!(p.queues[0].inflight_nonce.as_deref(), Some(first.as_str()));
+    }
+
+    #[test]
+    fn queue_cap_counts_inflight() {
+        let mut p = PipeSink::new(cfg(64)).unwrap();
+        assert_eq!(p.push(&block(Source::Geiger, 0, 32)), Push::Accepted);
+        p.seal_batch(0); // 32B が inflight へ移る
+
+        // 上限は bytes + inflight で見る。inflight を数え落とすと上限を超える。
+        assert_eq!(p.push(&block(Source::Geiger, 1, 32)), Push::Accepted);
+        assert_eq!(p.queued_bytes(), 64);
+        assert_eq!(
+            p.push(&block(Source::Geiger, 2, 32)),
+            Push::Rejected { first: true }
+        );
+        assert_eq!(p.push(&block(Source::Geiger, 3, 32)), Push::Rejected { first: false });
+        assert_eq!(p.queued_bytes(), 64); // 満杯でも既存の粒は捨てない
+    }
+
+    #[test]
+    fn unconfirmed_batch_is_resent_regardless_of_threshold() {
+        let mut p = PipeSink::new(cfg(4096)).unwrap();
+        p.push(&block(Source::Geiger, 0, 32)); // send_threshold(64) 未満
+        assert!(!p.should_send(&p.queues[0]));
+
+        p.seal_batch(0);
+        assert!(p.should_send(&p.queues[0]));
+    }
+
+    #[test]
+    fn sources_do_not_share_a_batch() {
+        let mut p = PipeSink::new(cfg(4096)).unwrap();
+        p.push(&block(Source::Geiger, 0, 32));
+        p.push(&block(Source::Test, 0, 32));
+        p.seal_batch(slot(Source::Geiger));
+
+        assert_eq!(p.queues[slot(Source::Geiger)].inflight.len(), 32);
+        assert!(p.queues[slot(Source::Test)].inflight.is_empty());
+        assert_eq!(p.queues[slot(Source::Test)].bytes.len(), 32);
     }
 }

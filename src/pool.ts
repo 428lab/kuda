@@ -255,9 +255,16 @@ export class EntropyPool {
     if (!body.bytes) return json({ error: "missing 'bytes' (base64)" }, 400);
 
     // 同じ nonce での再送は、一度目の結果をそのまま返して二重投入を防ぐ。
-    // DO は直列に処理されるので、この確認と後段の記録の間に別の /ingest は割り込まない。
-    const nonce =
-      typeof body.nonce === "string" ? body.nonce.replace(/[^a-z0-9_-]/gi, "").slice(0, 64) : "";
+    // 不正な nonce は正規化せずに 400 で弾く。削って辻褄を合わせると、別の nonce が
+    // 同じキーに潰れたときに、まだ入れていないバイト列を「受理済み」と答えてしまい、
+    // 送信側もそれを 200 と見てキューを捨てる(粒が黙って消える)。
+    //
+    // 確認から後段の記録までこの関数は await を挟まない。DO は await 点で他の要求と
+    // 交錯しうるので、この区間に非同期処理を足さないこと(足すと TOCTOU になる)。
+    const nonce = typeof body.nonce === "string" ? body.nonce : "";
+    if (nonce && !/^[A-Za-z0-9_-]{1,64}$/.test(nonce)) {
+      return json({ error: "invalid 'nonce' (1-64 chars of [A-Za-z0-9_-])" }, 400);
+    }
     if (nonce) {
       const seen = this.sql
         .exec<{ batch: string; ingested: number }>(
