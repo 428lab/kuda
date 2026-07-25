@@ -19,18 +19,23 @@ LLMや人間の「拮抗した選択」を、疑似乱数ではなく物理的�
 ```
 [ANU QRNG]──cron(1日1回)──┐
                            ▼
-[自宅: ガイガー管]──┐   Cloudflare Worker (Durable Object + SQLite)
-        │           │      pool表: 未消費の粒
-     [ESP32]──WiFi──┴──▶  drops表: 払い出しの監査ログ
-   パルス間隔LSB            │
-   → SHA-256               ▼
-   → POST /ingest      GET /drop ──▶ 消費者(一滴 = 1バイト)
+[自宅: ガイガー管]        Cloudflare Worker (Durable Object + SQLite)
+        │                    pool表: 未消費の粒
+     [ESP32]                 drops表: 払い出しの監査ログ
+   パルス間隔LSB              │
+   → SHA-256                 ▼
+        │ USBシリアル     GET /drop ──▶ 消費者(一滴 = 1バイト)
+        ▼                    ▲
+     [tubed]──POST /ingest───┘
+        └──▶ ホストの /dev/random
 ```
 
 - **第一源泉: ANU QRNG** — オーストラリア国立大の真空ゆらぎ測定。cronがサーバー側で
   定期取得するため、レガシーAPIのクライアント側キャッシュ問題を構造的に回避する。
 - **第二源泉: ガイガー管** — CAJOE系キットのパルス出力をESP32のGPIO割り込みで受け、
-  崩壊イベント間隔のLSBをSHA-256で白色化して `/ingest` にPOSTする。
+  崩壊イベント間隔のLSBをSHA-256で白色化してUSBシリアルに吐く。受け側のホストで
+  常駐する `tubed` が、設定した比率で `/ingest` とホストの `/dev/random` に配る
+  (同じ粒は決して両方には流さない)。ESP32 側にネットワークも秘密情報も無い。
   崩壊のタイミングは量子過程であり、予測は原理的に不可能。
 
 ## ダッシュボード
@@ -172,8 +177,11 @@ pnpm run deploy
 | GND | GND |
 | 5V | 5V (VUSB) |
 
-パルスは3V負論理なのでレベル変換不要。ファームウェアは
-WiFi設定・Worker URL・INGEST_TOKENを書き換えて焼く。
+パルスは3V負論理なのでレベル変換不要。給電と通信はホストの USB ポートから。
+ファームウェア([`firmware/geiger`](firmware/geiger))はピンと閾値だけを設定して焼く
+(WiFi設定もトークンも不要)。粒を受けて配るホスト側の常駐デーモンは
+[`host/tubed`](host/tubed) にある。
+
 動作確認は線源なしのバックグラウンド(20〜30CPM程度)でよい。
 ビットレートを上げたい場合はウランガラス等の微弱線源を管に近づける。
 
