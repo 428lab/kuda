@@ -96,8 +96,11 @@ fn parse_entropy(rest: &str) -> Result<Block> {
     let events = it.next().ok_or_else(|| anyhow!("E 行に events が無い"))?;
     let source = it.next().ok_or_else(|| anyhow!("E 行に source が無い"))?;
     let payload = it.next().ok_or_else(|| anyhow!("E 行に本体が無い"))?;
-    if it.next().is_some() {
-        bail!("E 行の項目が多い");
+    let extra = it.count();
+    if extra > 0 {
+        // 本体は白色化の出力そのものなので中身は出せない。行長だけ添えれば
+        // 行の連結(通常の倍近くなる)か空白の混入(通常長のまま)かを判別できる。
+        bail!("E 行の項目が多い (余分 {extra} 個, 行長 {} 文字)", rest.len());
     }
 
     let boot_id = u32::from_str_radix(boot_id, 16)
