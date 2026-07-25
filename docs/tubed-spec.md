@@ -48,6 +48,12 @@ tubelet ──USBシリアル──▶ tubed ──┬──▶ ioctl(RNDADDENTR
 - **疑似乱数で埋めない** — 溜まった分だけ送る。管が細い日は細いまま。
 - **二重投入禁止** — `POST /ingest` が **200 を返したときだけ**キューをクリアする。
   失敗時は指数バックオフ(30s→60s→…→上限10分)で、同じバイト列を保持したまま再試行する。
+  これは at-least-once であって exactly-once ではない。Worker が INSERT を終えた後に
+  レスポンスだけ失われた場合(タイムアウト・接続断)、同じバイト列が再 POST され、
+  `/ingest` に冪等キーが無いためプールに二重に入る。粒を失わない側に倒した結果であり、
+  塞ぐには Worker 側に nonce による冪等性が要る(未実装)。
+- **重複排除** — ESP32 から同じ `(boot_id, seq)` を二度受け取っても一度しか使わない。
+  こちらは確実に効く(USB の再接続やホスト側の再読み込みで重複しない)。
 - **出自を混ぜない** — `geiger` と `test` は別のキューに積み、1回の POST に混ぜない。
 - **キュー満杯時** — 上限(既定4KiB)に達したら新規蓄積を停止して警告。
   古い粒の破棄も新しい粒の上書きもしない。
@@ -66,13 +72,15 @@ tubelet ──USBシリアル──▶ tubed ──┬──▶ ioctl(RNDADDENTR
 10秒ごとに1行。イベント当日はこれをプロジェクタに映す。
 
 ```
-CPM=23 events=1234 recv=12blk | kernel=6blk/1.5Kb avail=3891 | kuda=96B last_post=200(45s ago) pool=20034 | link=OK
+CPM=23 events=1234 recv=12blk | kernel=6blk/1.5Kb avail=256 | kuda=96B last_post=200(45s ago) pool=20034 | link=OK
 ```
 
 - `CPM` / `events` — tubelet の `S` 行から
 - `recv` — tubed が受け取ったブロック数(`dup` が出たら重複排除が働いた印)
-- `kernel` — 注入したブロック数と計上ビット数、`avail` は
-  `/proc/sys/kernel/random/entropy_avail`
+- `kernel` — 注入したブロック数と計上ビット数。`avail` は
+  `/proc/sys/kernel/random/entropy_avail` の生値だが、Linux 5.17 以降
+  (5.10.119 / 5.15.44 にも backport)はプールが 256bit で飽和するため、注入しても
+  増えない。注入できているかは `kernel=` のブロック数で判断する
 - `kuda` — 未送信キュー、直近のHTTPステータスと経過、`pool` は kuda の残量
 - `link` — シリアルが繋がっているか
 
@@ -88,9 +96,10 @@ CPM=23 events=1234 recv=12blk | kernel=6blk/1.5Kb avail=3891 | kuda=96B last_pos
 
 ## 受け入れ条件
 
-1. `kernel_share` の比率どおりに `/proc/sys/kernel/random/entropy_avail` と
-   kuda の `pool_remaining` が増える
-2. ネット断→復帰で蓄積分が送信され、二重投入が起きない
+1. `kernel_share` の比率どおりに、ステータス行の `kernel=` のブロック数と
+   kuda の `pool_remaining` が増える(`entropy_avail` は 256 で飽和するので使えない)
+2. ネット断→復帰で蓄積分が送信され、ESP32 側の再送・再起動をまたいで
+   `(boot_id, seq)` の重複が排除される
 3. USB 抜き差し・tubed 再起動で正常に再開する
 4. `INGEST_TOKEN` がログ・journal・リポジトリに露出しない
 

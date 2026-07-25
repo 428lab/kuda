@@ -55,9 +55,21 @@
 キットの GND ---------------------+-- ESP32 GND
 ```
 
-下側 ÷ (上側 + 下側) が 0.66 以下になる組み合わせなら値は自由(1k:2k でも 4.7k:10k でも可)。
-**ESP32 の 5V/VIN は繋がない。** このキットは 9V 電池で独立給電されるので、電源を
-混ぜる必要がない。
+手持ちの抵抗で代用するなら、分圧比 = 下側 ÷ (上側 + 下側) が **0.55〜0.67** に収まる
+組み合わせにする(10k:20k と 1k:2k はどちらも 0.67、10k:15k は 0.60)。
+
+- 上限 0.67 — 5V × 0.67 = 3.35V。ESP32 の絶対最大定格 VDD+0.3 = 3.6V を割らない
+- 下限 0.55 — 5V × 0.55 = 2.75V。H と判定される閾値 0.75×3.3 = 2.48V を上回る
+- 合計は 10k〜100kΩ 程度。小さすぎるとキット側の負荷になり、大きすぎるとノイズを拾う
+- 4.7k:10k は 0.68(3.40V)で範囲外
+
+上側の抵抗には、圧電スピーカーのリンギング(容量性なので駆動停止時に GND 以下へ振れる)が
+ESP32 の保護ダイオードに流し込む電流を制限する役目もある。**抵抗の順序を入れ替えて
+GPIO 側を裸にしない。**
+
+**ESP32 の 5V/VIN は繋がない。** このキットは 9V 電池で独立給電されるので電源を混ぜる
+必要がなく、GND だけ共通にする。同じ理由で、**ESP32 の USB を挿していない状態で
+キットの電源を入れない**(GPIO 経由の逆給電になる)。
 
 `config.h`(デッドタイムは次の節で実測して決める):
 
@@ -126,11 +138,14 @@ sudo install -m 0644 udev/99-tubelet.rules /etc/udev/rules.d/99-tubelet.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ls -l /dev/tubelet
 
+# 専用ユーザーを先に作る。設定ファイルの所有権を渡すため
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin tubed
+
 # 設定。token は Worker の INGEST_TOKEN
-sudo install -D -m 0600 config.example.toml /etc/tubed/config.toml
+# root:root 0600 にすると User=tubed で読めず、5秒おきの再起動ループになる
+sudo install -D -o root -g tubed -m 0640 config.example.toml /etc/tubed/config.toml
 sudo $EDITOR /etc/tubed/config.toml
 
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin tubed
 sudo install -m 0644 systemd/tubed.service /etc/systemd/system/tubed.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now tubed
@@ -144,31 +159,46 @@ journalctl -u tubed -f
 
 一度に全部繋ぐと切り分けが効かないので、順に上げる。
 
+> **TEST_MODE の粒を本番の kuda に入れない。** `esp_random()` 由来で物理乱数では
+> なく、`/ingest` に入った粒はそのまま `/drop` から払い出される(規律「疑似乱数で
+> 埋めない」)。本番 URL に向けるのは 5-3 で実パルスが出てからにする。
+
+シリアルポートは排他オープンなので、手で動かすときは先にサービスを止める。
+
+```sh
+sudo systemctl stop tubed
+```
+
 ### 5-1. カーネル注入だけ(キット不要)
 
 ファームを `TEST_MODE 1` で焼き、`kernel_share = 1.0` にする。kuda には1バイトも
-送らないのでプールを test 粒で汚さない。`TEST_CPM` を一時的に上げる(例 6000)と
-数秒で1ブロック出るので待たなくてよい。
+送らない。`TEST_CPM` を一時的に上げる(例 6000)と数秒で1ブロック出るので待たなくてよい。
 
 ```sh
 sudo /usr/local/bin/tubed /etc/tubed/config.toml
 ```
 
-`kernel=` のブロック数が増えていけば ioctl が通っている。権限不足なら
-`CAP_SYS_ADMIN が要る` と明示して落ちる。
+`kernel=` のブロック数が増えていけば ioctl が通っている。**増えないまま
+`recv=` だけ伸びるときは権限不足**で、`カーネルへの注入に失敗` が標準エラーに
+出ている(現状は落ちずに続行するので、この行を見落とすと気づけない)。
 
-> `avail=`(`/proc/sys/kernel/random/entropy_avail`)は **Linux 5.18 以降 256 で
-> 飽和する**ので、注入しても増えない。増減で判断してはいけない。
+> `avail=`(`/proc/sys/kernel/random/entropy_avail`)は **Linux 5.17 以降** —
+> 5.10.119 / 5.15.44 にも backport されている — で 256 に飽和するので、注入しても
+> 増えない。増減で判断してはいけない。
 
-### 5-2. kuda への到達(キット不要)
+### 5-2. kuda への到達(キット不要・ローカル Worker 相手)
 
-`kernel_share` を下げて数分だけ動かし、`/status` の `pool_remaining` が増えるのを
-見たら止める。TEST_MODE の粒は `esp_random()` 由来で物理乱数ではないため、
-**長時間流し込まない**(規律「疑似乱数で埋めない」)。
+本番プールを test 粒で汚さないよう、ローカルの Worker に向けて確認する。
+リポジトリのルートで:
 
 ```sh
-curl -s https://kuda.kojiran.workers.dev/status | jq .pool_remaining
+pnpm exec wrangler dev            # http://127.0.0.1:8787
 ```
+
+`/etc/tubed/config.toml` の `pipe.url` を一時的に `http://127.0.0.1:8787` にし、
+`token` は `.dev.vars` の `INGEST_TOKEN` に合わせる。`kernel_share` を下げて動かし、
+`last_post=200` になり `pool` が増えれば HTTP 経路は生きている。確認できたら
+`pipe.url` を本番に戻す。
 
 ### 5-3. 実パルス
 
@@ -176,17 +206,29 @@ curl -s https://kuda.kojiran.workers.dev/status | jq .pool_remaining
 検出ごとに点滅すれば経路が生きている。キットが無い段階でも、GPIO4 と GND を
 ジャンパで短く触れさせれば ISR/LED/CPM の確認だけはできる。
 
+ここで初めて本番 URL に向けてよい。
+
+```sh
+curl -s https://kuda.kojiran.workers.dev/status | jq .pool_remaining
+```
+
 ### 5-4. 本番
 
 `kernel_share` を運用値(既定 0.5)にして systemd で常駐させる。
+
+```sh
+sudo systemctl start tubed
+```
 
 ## 検証できたと言える条件
 
 1. `kernel=` のブロック数が増える(= `RNDADDENTROPY` が成功している)
 2. `pool_remaining` が増える
 3. 実パルスで cpm が動き LED が点滅する
-4. USB 抜き差し・ネット断からの復帰で二重投入が起きない
-   (`recv` は増えるが `dup` は増えない、`last_post` が 200 になるまでキューが減らない)
+4. USB 抜き差しからの復帰で二重投入が起きない(`recv` は増えるが `dup` は増えない)。
+   ネット断からの復帰では `last_post` が 200 になるまでキューが減らない
+   — ただし POST は at-least-once。Worker が受理した後にレスポンスだけ失われると
+   同じバイト列が再送され、プールに二重に入る(塞ぐには Worker 側の冪等キーが要る)
 5. ESP32 の電源断→再起動で正常に再開する(`boot=` が変わり `seq` が 0 から振り直される)
 6. `INGEST_TOKEN` がログ・journal・リポジトリに出ていない
 

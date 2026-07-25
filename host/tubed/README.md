@@ -43,12 +43,12 @@ sudo install -m 0644 udev/99-tubelet.rules /etc/udev/rules.d/99-tubelet.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ls -l /dev/tubelet           # → /dev/ttyUSB0 などへのシンボリックができる
 
-# 3. 設定(INGEST_TOKEN を含むので 0600)
-sudo install -D -m 0600 config.example.toml /etc/tubed/config.toml
-sudo $EDITOR /etc/tubed/config.toml
-
-# 4. 専用ユーザー
+# 3. 専用ユーザー(設定より先に作る。設定の所有権を渡すため)
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin tubed
+
+# 4. 設定(INGEST_TOKEN を含む。tubed だけが読める 0640)
+sudo install -D -o root -g tubed -m 0640 config.example.toml /etc/tubed/config.toml
+sudo $EDITOR /etc/tubed/config.toml
 
 # 5. サービス
 sudo install -m 0644 systemd/tubed.service /etc/systemd/system/tubed.service
@@ -75,13 +75,17 @@ sudo /usr/local/bin/tubed /etc/tubed/config.toml
 kuda: https://kuda.kojiran.workers.dev 疎通OK pool_remaining=20034 version=2026-07-20
 シリアル: /dev/tubelet 115200bps
 tubelet 起動: fw=usb-0.1.0 boot=b5f976ff mode=geiger
-CPM=23 events=1234 recv=12blk | kernel=6blk/1.5Kb avail=3891 | kuda=96B last_post=200(45s ago) pool=20034 | link=OK
+CPM=23 events=1234 recv=12blk | kernel=6blk/1.5Kb avail=256 | kuda=96B last_post=200(45s ago) pool=20034 | link=OK
 ```
 
 ## 確認
 
+注入できているかは `kernel=` のブロック数で見る。`avail` は Linux 5.17 以降
+(5.10.119 / 5.15.44 にも backport 済み)では 256 で飽和するので、増減を指標に
+してはいけない。
+
 ```sh
-cat /proc/sys/kernel/random/entropy_avail     # 注入で増える
+cat /proc/sys/kernel/random/entropy_avail     # 現行カーネルでは 256 のまま
 curl -s https://kuda.kojiran.workers.dev/status | jq .pool_remaining
 ```
 
