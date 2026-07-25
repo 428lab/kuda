@@ -12,11 +12,15 @@
 
 #include <Arduino.h>
 #include <math.h>
+#include <Preferences.h> // boot_id の元になるブートカウンタ(NVS)
 #include "mbedtls/sha256.h"
 #include "mbedtls/base64.h"
-#include "esp_random.h" // boot_id の生成のみに使う(エントロピーには混ぜない)
 
 #include "config.h"
+
+#if TEST_MODE
+#include "esp_random.h" // 合成パルスの間隔生成のみに使う(エントロピーには混ぜない)
+#endif
 
 static const char *FW_VERSION = "usb-0.1.0";
 
@@ -87,6 +91,32 @@ static void sha256(const uint8_t *in, size_t len, uint8_t out[32]) {
 
 static void warn(const char *msg) {
   Serial.printf("W %s\n", msg);
+}
+
+// boot_id は「同じ基板の別の起動」で必ず変わらなければならない。ホスト側の重複排除が
+// (boot_id, seq) を鍵にしているので、衝突すると新しい粒が既出扱いで捨てられる。
+// RF 無効のこのファームでは esp_random() に一意性の保証が無いため、個体を表す MAC と
+// 起動ごとに単調増加する NVS のカウンタから導く。
+static uint32_t makeBootId() {
+  Preferences prefs;
+  uint32_t count = 0;
+  if (prefs.begin("tubelet", false)) {
+    count = prefs.getUInt("boots", 0) + 1;
+    prefs.putUInt("boots", count);
+    prefs.end();
+  } else {
+    warn("NVS を開けない - boot_id が起動ごとに変わらず、重複排除が誤作動する");
+  }
+
+  uint8_t seed[10];
+  uint64_t mac = ESP.getEfuseMac();
+  for (int i = 0; i < 6; i++) seed[i] = (uint8_t)(mac >> (8 * i));
+  for (int i = 0; i < 4; i++) seed[6 + i] = (uint8_t)(count >> (8 * i));
+
+  uint8_t digest[32];
+  sha256(seed, sizeof(seed), digest);
+  return ((uint32_t)digest[0] << 24) | ((uint32_t)digest[1] << 16) |
+         ((uint32_t)digest[2] << 8) | (uint32_t)digest[3];
 }
 
 static void rollBuckets() {
@@ -221,7 +251,7 @@ void setup() {
   delay(200);
   Serial.println();
 
-  bootId = esp_random();
+  bootId = makeBootId();
 
   pinMode(GPIO_LED, OUTPUT);
   digitalWrite(GPIO_LED, LOW);
