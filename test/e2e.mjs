@@ -303,8 +303,11 @@ if (process.env.ADMIN_SK) {
   // 潰れ、入れていないバイト列を受理済みと答えて粒が消える。
   const bad = await post({ bytes, source: "e2e", nonce: "a b.c" });
   const tooLong = await post({ bytes, source: "e2e", nonce: "x".repeat(65) });
+  const notString = await post({ bytes, source: "e2e", nonce: 12345 });
   check("不正な文字を含む nonce は400", bad.status === 400, `status=${bad.status}`);
   check("64文字を超える nonce は400", tooLong.status === 400, `status=${tooLong.status}`);
+  check("文字列でない nonce は400(黙って冪等性を落とさない)", notString.status === 400,
+        `status=${notString.status}`);
 }
 
 // ── 既存経路の不変 ──

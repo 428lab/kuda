@@ -93,8 +93,9 @@ curl -s https://kuda.kojiran.workers.dev/status | jq .pool_remaining
 
 - **`link=DOWN` のまま** — `/dev/tubelet` が無い。udev ルールを入れたか、
   ESP32 が挿さっているか (`lsusb` に `1a86:7523` が見えるか) を確認する。
-- **`RNDADDENTROPY が拒否された`** — `CAP_SYS_ADMIN` が無い。手動起動なら sudo、
-  サービスなら unit の `AmbientCapabilities` を確認する。
+- **`RNDADDENTROPY が拒否された`** — `CAP_SYS_ADMIN` が無い。権限は起動時に
+  確かめるので、この場合はサービスが上がらず(`Restart=always` で再起動を繰り返す)。
+  手動起動なら sudo、サービスなら unit の `AmbientCapabilities` を確認する。
 - **`kuda=...` が動かない** — `kernel_share = 1.0` になっていないか。
   `last_post` が 401 なら token 違い、413 ならキューが 64KiB を超えている。
 - **`recv` が増えない** — ファームが `TEST_MODE 0` で線源も無い場合、

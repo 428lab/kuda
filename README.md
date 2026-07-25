@@ -131,6 +131,8 @@ ANUから手動補充。通常はcronが1日1回(1024バイト)自動実行す�
 `nonce`(任意・64文字以内の英数字/`-`/`_`)を添えると冪等になる。受理した後に
 レスポンスだけ失われて再送された場合、同じ `nonce` ならプールには入れず
 `{"ok": true, "duplicate": true, ...}` で一度目の結果を返す。控えは24時間で消える。
+形式に合わない `nonce` は**正規化せず400で弾く**(削って辻褄を合わせると、別の
+`nonce` が同じキーに潰れて、入れていないバイト列を受理済みと答えてしまうため)。
 
 ### `POST /admin/keys` (要 `Authorization: Bearer <INGEST_TOKEN>`・break-glass)
 システム鍵(`user_id` なし)の発行。body: `{"label": "project-a", "daily_quota": 100}`。

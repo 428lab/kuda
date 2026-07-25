@@ -251,7 +251,7 @@ export class EntropyPool {
   private async ingest(req: Request): Promise<Response> {
     if (!this.authorized(req)) return json({ error: "unauthorized" }, 401);
 
-    const body = (await req.json()) as { bytes?: string; source?: string; nonce?: string };
+    const body = (await req.json()) as { bytes?: string; source?: string; nonce?: unknown };
     if (!body.bytes) return json({ error: "missing 'bytes' (base64)" }, 400);
 
     // 同じ nonce での再送は、一度目の結果をそのまま返して二重投入を防ぐ。
@@ -261,7 +261,12 @@ export class EntropyPool {
     //
     // 確認から後段の記録までこの関数は await を挟まない。DO は await 点で他の要求と
     // 交錯しうるので、この区間に非同期処理を足さないこと(足すと TOCTOU になる)。
-    const nonce = typeof body.nonce === "string" ? body.nonce : "";
+    // 文字列以外を無言で「nonce 無し」に降格させない。呼び出し側が冪等のつもりで
+    // いるのに冪等でない、という状態を作らないため。
+    if (body.nonce !== undefined && typeof body.nonce !== "string") {
+      return json({ error: "invalid 'nonce' (must be a string)" }, 400);
+    }
+    const nonce: string = typeof body.nonce === "string" ? body.nonce : "";
     if (nonce && !/^[A-Za-z0-9_-]{1,64}$/.test(nonce)) {
       return json({ error: "invalid 'nonce' (1-64 chars of [A-Za-z0-9_-])" }, 400);
     }
