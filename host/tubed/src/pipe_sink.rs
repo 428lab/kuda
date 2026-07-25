@@ -1,7 +1,9 @@
 //! kuda への補充 (POST /ingest)。
 //!
 //! 規律:
-//! - 200 が返ったときだけキューをクリアする(再送で二重投入しない)。
+//! - 200 が返ったときだけキューをクリアする(再送で粒を失わない)。
+//! - 再送には同じ nonce を付ける。Worker が受理した後にレスポンスだけ失われても、
+//!   二度目は冪等キーで弾かれてプールに二重に入らない。
 //! - キューが上限に達したら新規蓄積を停止して警告。古い粒の破棄も上書きもしない。
 //! - 出自の異なる粒(geiger / test)は別のキューに積み、1回の POST に混ぜない。
 
@@ -9,7 +11,7 @@ use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::Deserialize;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::Pipe as PipeConfig;
 use crate::frame::{Block, Source};
@@ -34,7 +36,13 @@ pub enum Push {
 
 struct Queue {
     source: Source,
+    /// まだ送信バッチに入れていない粒。
     bytes: Vec<u8>,
+    /// 送信を試みたが 200 を得ていないバッチ。再送しても中身を変えない。
+    /// 後から来た粒を混ぜると、nonce と内容がずれて冪等判定に引っかかり、
+    /// 追加分まで受理済み扱いで捨てられてしまう。
+    inflight: Vec<u8>,
+    inflight_nonce: Option<String>,
     full: bool,
     last_post: Instant,
 }
@@ -44,10 +52,25 @@ impl Queue {
         Queue {
             source,
             bytes: Vec::new(),
+            inflight: Vec::new(),
+            inflight_nonce: None,
             full: false,
             last_post: Instant::now(),
         }
     }
+
+    fn held(&self) -> usize {
+        self.bytes.len() + self.inflight.len()
+    }
+}
+
+/// nonce の前半。プロセスごとに変わればよく、秘密ではないので物理乱数は使わない。
+fn make_run_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}-{:x}", nanos, std::process::id())
 }
 
 pub struct PipeSink {
@@ -60,6 +83,8 @@ pub struct PipeSink {
     pub last_post: Option<Instant>,
     pub pool_remaining: Option<u64>,
     pub bytes_sent: u64,
+    run_id: String,
+    nonce_seq: u64,
 }
 
 fn slot(source: Source) -> usize {
@@ -86,6 +111,8 @@ impl PipeSink {
             last_post: None,
             pool_remaining: None,
             bytes_sent: 0,
+            run_id: make_run_id(),
+            nonce_seq: 0,
         })
     }
 
@@ -109,7 +136,7 @@ impl PipeSink {
     }
 
     pub fn queued_bytes(&self) -> usize {
-        self.queues.iter().map(|q| q.bytes.len()).sum()
+        self.queues.iter().map(|q| q.held()).sum()
     }
 
     pub fn is_full(&self) -> bool {
@@ -119,7 +146,7 @@ impl PipeSink {
     /// キューに積む。満杯なら受け取らない(古い粒の破棄も上書きもしない)。
     pub fn push(&mut self, block: &Block) -> Push {
         let q = &mut self.queues[slot(block.source)];
-        if q.bytes.len() + block.bytes.len() > self.cfg.queue_max_bytes {
+        if q.held() + block.bytes.len() > self.cfg.queue_max_bytes {
             let first = !q.full;
             q.full = true;
             return Push::Rejected { first };
@@ -129,6 +156,9 @@ impl PipeSink {
     }
 
     fn should_send(&self, q: &Queue) -> bool {
+        if !q.inflight.is_empty() {
+            return true; // 未確定のバッチがあるなら、閾値を待たずに再送する
+        }
         if q.bytes.is_empty() {
             return false;
         }
@@ -168,15 +198,25 @@ impl PipeSink {
     }
 
     fn post(&mut self, index: usize) -> Result<()> {
-        let payload = BASE64.encode(&self.queues[index].bytes);
+        // 送信バッチを固定する。再送では同じ内容を同じ nonce で送る。
+        if self.queues[index].inflight.is_empty() {
+            self.nonce_seq += 1;
+            let nonce = format!("{}-{}", self.run_id, self.nonce_seq);
+            let q = &mut self.queues[index];
+            q.inflight = std::mem::take(&mut q.bytes);
+            q.inflight_nonce = Some(nonce);
+        }
+
+        let payload = BASE64.encode(&self.queues[index].inflight);
         let source = self.queues[index].source.as_str();
+        let nonce = self.queues[index].inflight_nonce.clone().unwrap_or_default();
         let url = format!("{}/ingest", self.cfg.url);
 
         let resp = self
             .client
             .post(&url)
             .bearer_auth(&self.cfg.token)
-            .json(&serde_json::json!({ "bytes": payload, "source": source }))
+            .json(&serde_json::json!({ "bytes": payload, "source": source, "nonce": nonce }))
             .send()
             .context("POST /ingest に失敗")?;
 
@@ -186,10 +226,11 @@ impl PipeSink {
             anyhow::bail!("/ingest -> {code}");
         }
 
-        let sent = self.queues[index].bytes.len();
+        let sent = self.queues[index].inflight.len();
         // 200 を確認してからクリアする。ここより前でクリアしてはならない。
         let q = &mut self.queues[index];
-        q.bytes.clear();
+        q.inflight.clear();
+        q.inflight_nonce = None;
         q.full = false;
         q.last_post = Instant::now();
 
