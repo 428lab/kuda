@@ -1,0 +1,12 @@
+# tubelet (ガイガー基板 + ESP32) を /dev/tubelet に固定する。
+#
+#   sudo install -m 0644 udev/99-tubelet.rules /etc/udev/rules.d/99-tubelet.rules
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# 1a86:7523 は Freenove ESP32-WROOM-32E ボードに載っている CH340 USB-UART。
+# CP2102 版のボードを使う場合は 10c4:ea60 の行を有効にする。
+# CH340 はシリアル番号を持たないため、同じチップの USB-UART を複数挿すと
+# どれが tubelet か決まらない。1台だけ挿すこと。
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="tubelet", GROUP="dialout", MODE="0660"
+#SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="tubelet", GROUP="dialout", MODE="0660"

@@ -1,0 +1,5 @@
+# ビルド成果物
+/target
+
+# 実際の設定(INGEST_TOKEN を含む)はコミットしない
+config.toml

@@ -1,0 +1,27 @@
+[package]
+name = "tubed"
+version = "0.1.0"
+edition = "2021"
+description = "乱数の管 — ガイガー管由来のエントロピーを /dev/random と kuda に配る常駐デーモン"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# libudev を要求しないようデフォルト機能を切る(ポートは config で明示指定する)
+serialport = { version = "4", default-features = false }
+
+# TLS は rustls(純Rust側の証明書検証)。OS の OpenSSL に依存しない。
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls-tls-native-roots",
+] }
+
+[profile.release]
+strip = true

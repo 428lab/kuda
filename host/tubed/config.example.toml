@@ -1,0 +1,35 @@
+# tubed 設定サンプル。
+#
+#   sudo install -D -m 0600 config.example.toml /etc/tubed/config.toml
+#   sudo $EDITOR /etc/tubed/config.toml
+#
+# 実ファイルは INGEST_TOKEN を含む。0600 のままにし、リポジトリに戻さないこと。
+
+[serial]
+# udev/99-tubelet.rules が作るシンボリック。生のデバイスは /dev/ttyUSB0 など。
+device = "/dev/tubelet"
+baud = 115200
+
+[split]
+# 32B ブロック単位で /dev/random に回す割合。残りが kuda に行く。
+# 同じブロックが両方へ流れることはない(カーネル乱数の種を公開プールに出さないため)。
+#   1.0 = 全部カーネル(kuda には送らない。[pipe] を省略できる)
+#   0.0 = 全部 kuda
+kernel_share = 0.5
+
+[kernel]
+# RNDADDENTROPY の発行先。/dev/random と /dev/urandom は同じプールを指す。
+device = "/dev/urandom"
+# 1イベントあたり何ビットとして計上するか。保守的に 1。
+bits_per_event = 1
+
+[pipe]
+url = "https://kuda.kojiran.workers.dev"
+token = "replace-with-worker-INGEST_TOKEN"
+queue_max_bytes = 4096
+send_threshold = 64
+send_min = 32
+idle_secs = 600
+backoff_min_secs = 30
+backoff_max_secs = 600
+timeout_secs = 20
