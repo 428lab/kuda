@@ -128,6 +128,10 @@ ANUから手動補充。通常はcronが1日1回(1024バイト)自動実行す�
 ### `POST /ingest` (要 `Authorization: Bearer <INGEST_TOKEN>`)
 自宅源泉からの補充。body: `{"bytes": "<base64>", "source": "home"}`。最大64KiB/回。
 
+`nonce`(任意・64文字以内の英数字/`-`/`_`)を添えると冪等になる。受理した後に
+レスポンスだけ失われて再送された場合、同じ `nonce` ならプールには入れず
+`{"ok": true, "duplicate": true, ...}` で一度目の結果を返す。控えは24時間で消える。
+
 ### `POST /admin/keys` (要 `Authorization: Bearer <INGEST_TOKEN>`・break-glass)
 システム鍵(`user_id` なし)の発行。body: `{"label": "project-a", "daily_quota": 100}`。
 **平文キーはこの応答で一度だけ返る**(保存されるのはSHA-256のみ)。レガシー案件用 +

@@ -120,6 +120,18 @@ export class EntropyPool {
         value TEXT NOT NULL
       );
     `);
+
+    // /ingest の冪等キー。INSERT は終わったのにレスポンスだけ失われた場合、
+    // 送信側は同じバイト列を再送してくる。受理済みの nonce を控えておき、
+    // 二度目はプールに入れずに一度目の結果を返す(TTL 24時間で lazy に掃除)。
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS ingest_nonces (
+        nonce      TEXT PRIMARY KEY,
+        batch      TEXT NOT NULL,
+        ingested   INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
   }
 
   // 運用パラメータの既定値(settings 未設定時のフォールバック)。
@@ -230,13 +242,34 @@ export class EntropyPool {
                   pool_remaining: this.poolCount() });
   }
 
+  // 受理済み nonce を控えておく期間。送信側のバックオフ上限(10分)より十分長く取る。
+  private static readonly INGEST_NONCE_TTL_SEC = 86400; // 24時間
+
   // POST /ingest  Authorization: Bearer <INGEST_TOKEN>
-  // body: { "bytes": "<base64>", "source": "home" }  最大 64KiB/回 (第二段階の補充経路)
+  // body: { "bytes": "<base64>", "source": "home", "nonce": "<任意・冪等キー>" }
+  // 最大 64KiB/回 (第二段階の補充経路)
   private async ingest(req: Request): Promise<Response> {
     if (!this.authorized(req)) return json({ error: "unauthorized" }, 401);
 
-    const body = (await req.json()) as { bytes?: string; source?: string };
+    const body = (await req.json()) as { bytes?: string; source?: string; nonce?: string };
     if (!body.bytes) return json({ error: "missing 'bytes' (base64)" }, 400);
+
+    // 同じ nonce での再送は、一度目の結果をそのまま返して二重投入を防ぐ。
+    // DO は直列に処理されるので、この確認と後段の記録の間に別の /ingest は割り込まない。
+    const nonce =
+      typeof body.nonce === "string" ? body.nonce.replace(/[^a-z0-9_-]/gi, "").slice(0, 64) : "";
+    if (nonce) {
+      const seen = this.sql
+        .exec<{ batch: string; ingested: number }>(
+          "SELECT batch, ingested FROM ingest_nonces WHERE nonce = ?",
+          nonce
+        )
+        .toArray();
+      if (seen.length > 0) {
+        return json({ ok: true, duplicate: true, ingested: seen[0].ingested,
+                      batch: seen[0].batch, pool_remaining: this.poolCount() });
+      }
+    }
 
     let raw: Uint8Array;
     try {
@@ -256,6 +289,16 @@ export class EntropyPool {
         "INSERT INTO pool (byte, batch, ingested_at) VALUES (?, ?, ?)",
         b, batch, now
       );
+    }
+    if (nonce) {
+      this.sql.exec(
+        "INSERT INTO ingest_nonces (nonce, batch, ingested, created_at) VALUES (?, ?, ?, ?)",
+        nonce, batch, raw.length, now
+      );
+      const cutoff = new Date(
+        Date.now() - EntropyPool.INGEST_NONCE_TTL_SEC * 1000
+      ).toISOString();
+      this.sql.exec("DELETE FROM ingest_nonces WHERE created_at < ?", cutoff);
     }
     const remaining = this.poolCount();
     return json({ ok: true, ingested: raw.length, batch, pool_remaining: remaining });
