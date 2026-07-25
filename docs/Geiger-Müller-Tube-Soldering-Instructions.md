@@ -95,7 +95,8 @@
    - 信号は **VIN** (シルク印刷に反して、VINが出力)。またはJ1のジャンパを
      外して上ピンから取る (ジャンパを外すとカチカチ音も止まる。深夜運用向き)
 3. ESP32のシリアルモニタでCPM表示を確認
-4. WiFi設定を入れてkudaの /ingest へ初回POST
+4. Linuxホストに挿し替えて `tubed` を動かす。ESP32 自身は WiFi も kuda の
+   トークンも持たない (手順は `docs/tubelet-setup.md`)
 5. `/status` で pool_remaining が増えたら —— **第二源泉、開通**
 
 ## 7. タコパとの共存規約

@@ -262,6 +262,54 @@ if (process.env.ADMIN_SK) {
   console.log("(ADMIN_SK 未設定のため管理者テストはスキップ)");
 }
 
+// ── /ingest の冪等性(nonce) ──
+// tubed は 200 を見るまでキューを保持するので、Worker が受理した後にレスポンスだけ
+// 失われると同じバイト列を再送してくる。nonce 付きなら二度目はプールに入らない。
+{
+  const bytes = btoa("nonce-idempotency-probe");
+  const post = (body) =>
+    api("/ingest", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${INGEST_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  const nonce = `e2e-${Date.now()}`;
+  const before = (await api("/status")).body.pool_remaining;
+  const first = await post({ bytes, source: "e2e", nonce });
+  const afterFirst = (await api("/status")).body.pool_remaining;
+  const second = await post({ bytes, source: "e2e", nonce });
+  const afterSecond = (await api("/status")).body.pool_remaining;
+
+  check("nonce 初回は受理", first.status === 200 && first.body.duplicate === undefined,
+        `status=${first.status}`);
+  check("nonce 再送は 200 かつ duplicate", second.status === 200 && second.body.duplicate === true,
+        `status=${second.status} body=${JSON.stringify(second.body)}`);
+  check("nonce 再送でプールが増えない",
+        afterFirst - before === first.body.ingested && afterSecond === afterFirst,
+        `${before} → ${afterFirst} → ${afterSecond}`);
+  check("nonce 再送は同じ batch を返す", second.body.batch === first.body.batch);
+
+  // nonce が違えば別物として受理される(通常の連続投入を妨げない)
+  const third = await post({ bytes, source: "e2e", nonce: `${nonce}-b` });
+  const afterThird = (await api("/status")).body.pool_remaining;
+  check("別 nonce は受理される", third.status === 200 && afterThird > afterSecond);
+
+  // nonce 無しは従来どおり(既存クライアントの互換)
+  const fourth = await post({ bytes, source: "e2e" });
+  check("nonce 無しでも受理される", fourth.status === 200 && fourth.body.duplicate === undefined);
+
+  // 不正な nonce は正規化せずに弾く。削って辻褄を合わせると別の nonce が同じキーに
+  // 潰れ、入れていないバイト列を受理済みと答えて粒が消える。
+  const bad = await post({ bytes, source: "e2e", nonce: "a b.c" });
+  const tooLong = await post({ bytes, source: "e2e", nonce: "x".repeat(65) });
+  const notString = await post({ bytes, source: "e2e", nonce: 12345 });
+  check("不正な文字を含む nonce は400", bad.status === 400, `status=${bad.status}`);
+  check("64文字を超える nonce は400", tooLong.status === 400, `status=${tooLong.status}`);
+  check("文字列でない nonce は400(黙って冪等性を落とさない)", notString.status === 400,
+        `status=${notString.status}`);
+}
+
 // ── 既存経路の不変 ──
 check("/__cron_refill 外部404", (await api("/__cron_refill", { method: "POST" })).status === 404);
 check("/refill 無トークン401", (await api("/refill", { method: "POST" })).status === 401);
