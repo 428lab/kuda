@@ -98,4 +98,4 @@ curl -s https://kuda.kojiran.workers.dev/status | jq .pool_remaining
 - **`kuda=...` が動かない** — `kernel_share = 1.0` になっていないか。
   `last_post` が 401 なら token 違い、413 ならキューが 64KiB を超えている。
 - **`recv` が増えない** — ファームが `TEST_MODE 0` で線源も無い場合、
-  256イベント溜まるまで(バックグラウンド 20〜30CPM で約10分)ブロックは出ない。
+  512イベント溜まるまで(バックグラウンド 20〜30CPM で約20分)ブロックは出ない。
