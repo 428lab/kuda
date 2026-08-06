@@ -16,7 +16,7 @@
     "@cloudflare/workers-types": "^4.20250101.0",
     "typescript": "^7.0.2",
     "vitest": "3.0.9",
-    "wrangler": "^3.99.0"
+    "wrangler": "^4.107.1"
   },
   "pnpm": {
     "//": "pnpm は依存の postinstall を既定でブロックする(サプライチェーン対策)。wrangler のビルドツールチェーンだけ明示的に許可し、他は遮断のまま。",
